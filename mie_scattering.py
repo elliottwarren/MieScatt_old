@@ -1,7 +1,9 @@
 __author__ = 'nerc'
 
 
-def linear_interpolate_n(dict, aim_lambda):
+
+
+def linear_interpolate_n(aerosol, aim_lambda):
 
     """
     linearly interpolate the complex index of refraction for a wavelength, given the complex index of refraction for two
@@ -14,40 +16,111 @@ def linear_interpolate_n(dict, aim_lambda):
     :return:dict_parts: dictionary with the index refraction parts and how far it was interpolated
     """
 
-    # # test - ammonium sulphate
-    # lower_lambda = 8.0e-07
-    # upper_lambda = 1.0e-06
-    # aim_lambda = 0.91e-06
-    # lower_n = 1.525
-    # upper_n = 1.51
-    # lower_k = 1.0e-07
-    # upper_k = 3.5e-07
+    # read in aerosol file
+    # find values to interpolate between
+    # carry out interpolation
+    # inputs (aerosol_type (single),
 
-    # differences
+    import numpy as np
 
-    # wavelength
-    diff_lambda = dict['upper_lambda'] - dict['lower_lambda']
+    def aer_file_read(aerosol):
 
-    # n
-    diff_n = dict['upper_n'] - dict['lower_n']
+        """
+        Locate and read the aerosol file. STore wavelength, n and k parts in dictionary
+        """
 
-    # k
-    diff_k = dict['upper_k'] - dict['lower_k']
+        from numpy import array
+
+        # aerosol data dir
+        aer_datadir = '/home/nerc/Documents/MieScatt/complex index of refraction/'
+
+        # find aerosol filename
+        if aerosol == 'ammonium_nitrate':
+            aer_file = 'refract_ammoniumnitrate'
+        elif aerosol == 'ammonium_sulphate':
+            aer_file = 'refract_ammoniumsulphate'
+        elif aerosol == 'organic_carbon':
+            aer_file = 'refract_ocff'
+        else:
+            raise ValueError("incorrect species or not yet included in aerosol list")
+
+        # full path
+        file_path = aer_datadir + aer_file
+
+        # empty dictionary to hold data
+        data = {'lambda': [],
+                'real': [],
+                'imaginary': []}
+
+        # open file and read down to when data starts
+        file = open(file_path, "r")
+        s = file.readline()
+        while s[:-1] != '*BEGIN_DATA':
+            s = file.readline()
+
+        line = file.readline() # read line
+        while line[:-1] != '*END':
+            line = ' '.join(line.split()) # remove leading and trailing spaces. Replace multiple spaces in the middle with one.
+
+            # if line isn't last line in file
+
+            line_split = line.split(' ')
+            data['lambda'] += [float(line_split[0])]
+            data['real'] += [float(line_split[1])]
+            data['imaginary'] += [float(line_split[2])]
+
+            # read next line
+            line = file.readline()
+
+        # convert to numpy array
+        for key, value in data.iteritems():
+            data[key] = array(value)
+
+        return data
 
 
-    # distance aim_lambda is along linear interpolation [fraction] from the lower limit
-    frac = ((aim_lambda - dict['lower_lambda']) / diff_lambda)
+    # read in the aerosol file data
+    data = aer_file_read(aerosol)
 
-    # calc interpolated values for n and k
-    interp_n = dict['lower_n'] + (frac * abs(diff_n))
-    interp_k = dict['lower_k'] + (frac * abs(diff_k))
+    # find locaiton of lambda within the spectral file
+    idx = np.searchsorted(data['lambda'], aim_lambda)
 
-    # interpolated complex index of refraction
-    n = complex(interp_n, interp_k)
+    # find adjacent wavelengths
+    # if lambda is same as one in spectral file, extract
+    if data['lambda'][idx] == aim_lambda:
 
-    dict_parts = {'interp_n': interp_n,
-            'interp_k': interp_k,
-            'frac': frac}
+        lambda_n = data['real'][idx]
+        lambda_k = data['imaginary'][idx]
+        frac = np.nan
+
+    # else interpolate to it
+    else:
+        upper_lambda = data['lambda'][idx]
+        lower_lambda = data['lambda'][idx-1]
+        upper_n = data['real'][idx]
+        lower_n = data['real'][idx-1]
+        upper_k = data['imaginary'][idx]
+        lower_k = data['imaginary'][idx-1]
+
+        # differences
+        diff_lambda = upper_lambda - lower_lambda
+        diff_n = upper_n - lower_n
+        diff_k = upper_k - lower_k
+
+        # distance aim_lambda is along linear interpolation [fraction] from the lower limit
+        frac = ((aim_lambda - lower_lambda) / diff_lambda)
+
+        # calc interpolated values for n and k
+        lambda_n = lower_n + (frac * abs(diff_n))
+        lambda_k = lower_k + (frac * abs(diff_k))
+
+
+    # Complex index of refraction using lambda_n and k
+    n = complex(lambda_n, lambda_k)
+
+    dict_parts = {'lambda_n': lambda_n,
+                'lambda_k': lambda_k,
+                'frac': frac}
 
     return n, dict_parts
 
@@ -96,41 +169,41 @@ def main():
     # input n from dictionary is actually n(bar) from: n = n(bar) - ik
     # output n is complex index of refraction
 
-    # Toon et al, 1976
-    ammonium_sulphate_dict = {
-        'lower_lambda': 8.0e-07,
-        'upper_lambda': 1.0e-06,
-        'lower_n': 1.525,
-        'upper_n': 1.51,
-        'lower_k': 1.0e-07,
-        'upper_k': 3.5e-07}
-
-    # n: CRC handbook of Chem. and Phys., 58th Ed., 1971 (lambda is actually for 587.6 nm, though used for 910 nm in UM)
-    # k: Gosse et al., Applied Optics 1997 though in solution at 25 %
-    # jump in k is large, ideally want k for wavelengths closer to the ceil
-    ammonium_nitrate_dict = {
-        'lower_lambda': 8.0e-07,
-        'upper_lambda': 1.0e-06,
-        'lower_n': 1.611,
-        'upper_n': 1.611,
-        'lower_k': 1.06e-07,
-        'upper_k': 3.15e-06}
-
-    # taken from fossil fuel organic carbon
-    organic_carbon_dict = {
-        'lower_lambda': 8.6e-07,
-        'upper_lambda': 1.06e-06,
-        'lower_n': 1.54045,
-        'upper_n': 1.54051,
-        'lower_k': 0.006,
-        'upper_k': 0.006}
+    # # Toon et al, 1976
+    # ammonium_sulphate_dict = {
+    #     'lower_lambda': 8.0e-07,
+    #     'upper_lambda': 1.0e-06,
+    #     'lower_n': 1.525,
+    #     'upper_n': 1.51,
+    #     'lower_k': 1.0e-07,
+    #     'upper_k': 3.5e-07}
+    #
+    # # n: CRC handbook of Chem. and Phys., 58th Ed., 1971 (lambda is actually for 587.6 nm, though used for 910 nm in UM)
+    # # k: Gosse et al., Applied Optics 1997 though in solution at 25 %
+    # # jump in k is large, ideally want k for wavelengths closer to the ceil
+    # ammonium_nitrate_dict = {
+    #     'lower_lambda': 8.0e-07,
+    #     'upper_lambda': 1.0e-06,
+    #     'lower_n': 1.611,
+    #     'upper_n': 1.611,
+    #     'lower_k': 1.06e-07,
+    #     'upper_k': 3.15e-06}
+    #
+    # # taken from fossil fuel organic carbon
+    # organic_carbon_dict = {
+    #     'lower_lambda': 8.6e-07,
+    #     'upper_lambda': 1.06e-06,
+    #     'lower_n': 1.54045,
+    #     'upper_n': 1.54051,
+    #     'lower_k': 0.006,
+    #     'upper_k': 0.006}
 
     # bulk complex index of refraction (CIR) for the MURK species using volume mixing method
 
     # calculate complex index of refraction for ceil wavelength
-    n_amm_sulph, _ = linear_interpolate_n(ammonium_sulphate_dict, ceil_lambda)
-    n_amm_nit, _= linear_interpolate_n(ammonium_nitrate_dict, ceil_lambda)
-    n_org_carb, _ = linear_interpolate_n(organic_carbon_dict, ceil_lambda)
+    n_amm_sulph, _ = linear_interpolate_n('ammonium_sulphate', ceil_lambda)
+    n_amm_nit, _= linear_interpolate_n('ammonium_nitrate', ceil_lambda)
+    n_org_carb, _ = linear_interpolate_n('organic_carbon', ceil_lambda)
 
     # Take average of 4 flights from Haywood for each species relative volume:
     vol_amm_sulph = 0.295
