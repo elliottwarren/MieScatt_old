@@ -165,6 +165,14 @@ def main():
     # directories
     savedir = '/home/nerc/Documents/MieScatt/figures/'
 
+    # densities of MURK constituents # [kg m-3]
+    # range of densities of org carb is massive (0.625 - 2 g cm-3)
+    # Haywood et al 2003 use 1.35 g cm-3 but Schkolnik et al., 2006 lit review this and claim 1.1 g cm-3
+    dens_amm_sulph = 1770
+    dens_amm_nit = 1720
+    dens_org_carb = 1100 # NOTE ABOVE
+
+
     # calculate complex index of refraction for MURK species
     # input n from dictionary is actually n(bar) from: n = n(bar) - ik
     # output n is complex index of refraction
@@ -205,33 +213,39 @@ def main():
     n_amm_nit, _= linear_interpolate_n('ammonium_nitrate', ceil_lambda)
     n_org_carb, _ = linear_interpolate_n('organic_carbon', ceil_lambda)
 
-    # Take average of 4 flights from Haywood for each species relative volume:
+    # Take average of 4 flights from Haywood for each species relative volume [frac of total volume]:
     vol_amm_sulph = 0.295
     vol_amm_nit = 0.325
     vol_org_carb = 0.38
 
-    # calculate absolute value of each species used in calculating murk
-    #! NOTE, not sure if MURK calculation was meant to use masses. Therefore, might need to convert volume above to
-    # mass, do the MURK calculation, then convert back to volume.
-    # Currently, just assumes the MURK equation uses relative volume.
-    abs_vol_amm_sulph = vol_amm_sulph * 0.33
-    abs_vol_amm_nit = vol_amm_nit * 0.15
-    abs_vol_org_carb = vol_org_carb * 0.34
+    # convert volume to mass [kg]
+    mass_amm_sulph = dens_amm_sulph * vol_amm_sulph
+    mass_amm_nit = dens_amm_nit * vol_amm_nit
+    mass_org_carb = dens_org_carb * vol_org_carb
 
-    # scale absolute amounts to find relative amounts of each used in MURK (so amm_sulph + amm_nit + org_carb = 1),
-    scaler = 1.0/(abs_vol_amm_sulph + abs_vol_amm_nit + abs_vol_org_carb)
-    rel_amm_sulph = scaler * abs_vol_amm_sulph
-    rel_amm_nit = scaler *abs_vol_amm_nit
-    rel_org_carb = scaler * abs_vol_org_carb
+    # Absolute mass of each species used in calculating murk
+    murk_mass_amm_sulph = mass_amm_sulph * 0.33
+    murk_mass_amm_nit = mass_amm_nit * 0.15
+    murk_mass_org_carb = mass_org_carb * 0.34
 
+    # Absolute volume of each used in MURK
+    murk_vol_amm_sulph = murk_mass_amm_sulph / dens_amm_sulph
+    murk_vol_amm_nit = murk_mass_amm_nit / dens_amm_nit
+    murk_vol_org_carb = murk_mass_org_carb / dens_org_carb
+
+    # scale absolute amounts to find relative volume of each used in MURK (so amm_sulph + amm_nit + org_carb = 1),
+    # [kg]
+    scaler = 1.0/(murk_vol_amm_sulph + murk_vol_amm_nit + murk_vol_org_carb)
+    rel_murk_vol_amm_sulph = scaler * murk_vol_amm_sulph
+    rel_murk_vol_amm_nit = scaler * murk_vol_amm_nit
+    rel_murk_vol_org_carb = scaler * murk_vol_org_carb
 
     # volume mixing for CIR (eq. 12, Liu and Daum 2008) -> seem pretty good to quote for this and alt. methods
-    n_murk = (rel_amm_sulph * n_amm_sulph) + (rel_amm_nit * n_amm_nit) + (rel_org_carb * n_org_carb)
+    n_murk = (rel_murk_vol_amm_sulph * n_amm_sulph) + (rel_murk_vol_amm_nit * n_amm_nit) + (rel_murk_vol_org_carb * n_org_carb)
 
 
     # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (910 nm) Hesse et al 1998
     n_water = complex(1.328, 1.099e-06)
-
 
     # create dry size distribution [m]
     r_md_microm = np.arange(0.001, 4.001, 0.001)
