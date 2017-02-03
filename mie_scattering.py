@@ -3,11 +3,10 @@ __author__ = 'nerc'
 
 
 
-def linear_interpolate_n(aerosol, aim_lambda):
+def linear_interpolate_n(particle, aim_lambda):
 
     """
-    linearly interpolate the complex index of refraction for a wavelength, given the complex index of refraction for two
-    surrounding wavelengths
+    linearly interpolate the complex index of refraction for a wavelength of the aerosol and water
 
     :input: dict: contains lower_lambda, upper_lambda, lower_n, upper_n, lower_k, upper_k for particle type
     :input: aim_lambda: what wavelength the values are being interpolated to
@@ -16,36 +15,33 @@ def linear_interpolate_n(aerosol, aim_lambda):
     :return:dict_parts: dictionary with the index refraction parts and how far it was interpolated
     """
 
-    # read in aerosol file
-    # find values to interpolate between
-    # carry out interpolation
-    # inputs (aerosol_type (single),
-
     import numpy as np
 
-    def aer_file_read(aerosol):
+    def part_file_read(particle):
 
         """
-        Locate and read the aerosol file. STore wavelength, n and k parts in dictionary
+        Locate and read the particle file. STore wavelength, n and k parts in dictionary
         """
 
         from numpy import array
 
-        # aerosol data dir
-        aer_datadir = '/home/nerc/Documents/MieScatt/complex index of refraction/'
+        # particle data dir
+        part_datadir = '/media/sf_HostGuestShared/complex index of refraction/'
 
-        # find aerosol filename
-        if aerosol == 'ammonium_nitrate':
-            aer_file = 'refract_ammoniumnitrate'
-        elif aerosol == 'ammonium_sulphate':
-            aer_file = 'refract_ammoniumsulphate'
-        elif aerosol == 'organic_carbon':
-            aer_file = 'refract_ocff'
+        # find particle filename
+        if particle == 'ammonium_nitrate':
+            part_file = 'refract_ammoniumnitrate'
+        elif particle == 'ammonium_sulphate':
+            part_file = 'refract_ammoniumsulphate'
+        elif particle == 'organic_carbon':
+            part_file = 'refract_ocff'
+        elif particle == 'water':
+            part_file = 'refract_water.txt'
         else:
-            raise ValueError("incorrect species or not yet included in aerosol list")
+            raise ValueError("incorrect species or not yet included in particle list")
 
         # full path
-        file_path = aer_datadir + aer_file
+        file_path = part_datadir + part_file
 
         # empty dictionary to hold data
         data = {'lambda': [],
@@ -55,11 +51,17 @@ def linear_interpolate_n(aerosol, aim_lambda):
         # open file and read down to when data starts
         file = open(file_path, "r")
         s = file.readline()
-        while s[:-1] != '*BEGIN_DATA':
+        s = s.rstrip('\n\r')
+
+        while s != '*BEGIN_DATA':
             s = file.readline()
+            s = s.rstrip('\n\r')
+            print s
 
         line = file.readline() # read line
-        while line[:-1] != '*END':
+        line = line.rstrip('\n\r')
+
+        while line != '*END':
             line = ' '.join(line.split()) # remove leading and trailing spaces. Replace multiple spaces in the middle with one.
 
             # if line isn't last line in file
@@ -71,6 +73,7 @@ def linear_interpolate_n(aerosol, aim_lambda):
 
             # read next line
             line = file.readline()
+            line = line.rstrip('\n\r')
 
         # convert to numpy array
         for key, value in data.iteritems():
@@ -79,8 +82,8 @@ def linear_interpolate_n(aerosol, aim_lambda):
         return data
 
 
-    # read in the aerosol file data
-    data = aer_file_read(aerosol)
+    # read in the particle file data
+    data = part_file_read(particle)
 
     # find locaiton of lambda within the spectral file
     idx = np.searchsorted(data['lambda'], aim_lambda)
@@ -177,35 +180,6 @@ def main():
     # input n from dictionary is actually n(bar) from: n = n(bar) - ik
     # output n is complex index of refraction
 
-    # # Toon et al, 1976
-    # ammonium_sulphate_dict = {
-    #     'lower_lambda': 8.0e-07,
-    #     'upper_lambda': 1.0e-06,
-    #     'lower_n': 1.525,
-    #     'upper_n': 1.51,
-    #     'lower_k': 1.0e-07,
-    #     'upper_k': 3.5e-07}
-    #
-    # # n: CRC handbook of Chem. and Phys., 58th Ed., 1971 (lambda is actually for 587.6 nm, though used for 910 nm in UM)
-    # # k: Gosse et al., Applied Optics 1997 though in solution at 25 %
-    # # jump in k is large, ideally want k for wavelengths closer to the ceil
-    # ammonium_nitrate_dict = {
-    #     'lower_lambda': 8.0e-07,
-    #     'upper_lambda': 1.0e-06,
-    #     'lower_n': 1.611,
-    #     'upper_n': 1.611,
-    #     'lower_k': 1.06e-07,
-    #     'upper_k': 3.15e-06}
-    #
-    # # taken from fossil fuel organic carbon
-    # organic_carbon_dict = {
-    #     'lower_lambda': 8.6e-07,
-    #     'upper_lambda': 1.06e-06,
-    #     'lower_n': 1.54045,
-    #     'upper_n': 1.54051,
-    #     'lower_k': 0.006,
-    #     'upper_k': 0.006}
-
     # bulk complex index of refraction (CIR) for the MURK species using volume mixing method
 
     # calculate complex index of refraction for ceil wavelength
@@ -213,28 +187,21 @@ def main():
     n_amm_nit, _= linear_interpolate_n('ammonium_nitrate', ceil_lambda)
     n_org_carb, _ = linear_interpolate_n('organic_carbon', ceil_lambda)
 
+    # NOTE: Able to use volume in MURK equation instead of mass because, if mass is evenly distributed within a volume
+    # then taking x of the mass = taking x of the volume.
+    # after calculating volumes used in MURK, can find relative % and do volume mixing.
+
     # Take average of 4 flights from Haywood for each species relative volume [frac of total volume]:
     vol_amm_sulph = 0.295
     vol_amm_nit = 0.325
     vol_org_carb = 0.38
 
-    # convert volume to mass [kg]
-    mass_amm_sulph = dens_amm_sulph * vol_amm_sulph
-    mass_amm_nit = dens_amm_nit * vol_amm_nit
-    mass_org_carb = dens_org_carb * vol_org_carb
+    # Absolute volume of each species used in calculating murk [m3]
+    murk_vol_amm_sulph = vol_amm_sulph * 0.33
+    murk_vol_amm_nit = vol_amm_nit * 0.15
+    murk_vol_org_carb = vol_org_carb * 0.34
 
-    # Absolute mass of each species used in calculating murk
-    murk_mass_amm_sulph = mass_amm_sulph * 0.33
-    murk_mass_amm_nit = mass_amm_nit * 0.15
-    murk_mass_org_carb = mass_org_carb * 0.34
-
-    # Absolute volume of each used in MURK
-    murk_vol_amm_sulph = murk_mass_amm_sulph / dens_amm_sulph
-    murk_vol_amm_nit = murk_mass_amm_nit / dens_amm_nit
-    murk_vol_org_carb = murk_mass_org_carb / dens_org_carb
-
-    # scale absolute amounts to find relative volume of each used in MURK (so amm_sulph + amm_nit + org_carb = 1),
-    # [kg]
+    # scale absolute amounts to find relative volume of each used in MURK (so amm_sulph + amm_nit + org_carb = 1) [m3]
     scaler = 1.0/(murk_vol_amm_sulph + murk_vol_amm_nit + murk_vol_org_carb)
     rel_murk_vol_amm_sulph = scaler * murk_vol_amm_sulph
     rel_murk_vol_amm_nit = scaler * murk_vol_amm_nit
@@ -243,8 +210,8 @@ def main():
     # volume mixing for CIR (eq. 12, Liu and Daum 2008) -> seem pretty good to quote for this and alt. methods
     n_murk = (rel_murk_vol_amm_sulph * n_amm_sulph) + (rel_murk_vol_amm_nit * n_amm_nit) + (rel_murk_vol_org_carb * n_org_carb)
 
-
     # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (910 nm) Hesse et al 1998
+    n_water, _ = linear_interpolate_n('water', ceil_lambda)
     n_water = complex(1.328, 1.099e-06)
 
     # create dry size distribution [m]
