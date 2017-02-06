@@ -31,9 +31,9 @@ def main():
     savedir = '/home/nerc/Documents/MieScatt/figures/sensitivity/'
 
     # aerosol with relative volume - varying manually - first one is average from haywood et al., 2008
-    rel_vol = {'ammonium_sulphate': [0.295, 0.80, 0.20, 0.20],
-               'ammonium_nitrate': [0.325, 0.20, 0.80, 0.20],
-                'organic_carbon': [0.38, 0.20, 0.20, 0.80]}
+    rel_vol = {'ammonium_sulphate': [0.295, 0.80, 0.10, 0.10],
+               'ammonium_nitrate': [0.325, 0.10, 0.80, 0.10],
+                'organic_carbon': [0.38, 0.10, 0.10, 0.80]}
 
 
     # create dry size distribution [m]
@@ -65,8 +65,13 @@ def main():
     n_mixed = []
     for i in range(len(rel_vol['ammonium_sulphate'])):
 
+        # extract out just this one set of relative amounts
+        rel_vol_i = {}
+        for key in rel_vol.keys():
+            rel_vol_i[key] = rel_vol[key][i]
+
         # uses relative amounts in the MURK equation!
-        n_mixed[i] = calc_n_murk(rel_vol, n_aerosol)
+        n_mixed += [calc_n_murk(rel_vol_i, n_aerosol)]
 
 
     # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (910 nm) Hesse et al 1998
@@ -87,21 +92,21 @@ def main():
     # # calculate swollen index of refraction using MURK
     # n_swoll = CIR_Hanel(n_water, n_murk, r_md, r_m)
 
-    for i in range(len(n_mixed)):
+    for j in range(len(n_mixed)):
 
 
         # Calc extinction efficiency for dry aerosol (using r_md!!!! NOT r_m)
-        all_particles_dry = [Mie(x=x_i, m=n_mixed[i]) for x_i in x_dry]
+        all_particles_dry = [Mie(x=x_i, m=n_mixed[j]) for x_i in x_dry]
         Q_dry = np.array([particle.qext() for particle in all_particles_dry])
 
         # use proportions of each to scale the colours on the plot
-        colours = [rel_vol['ammonium_sulphate'][i],
-                   rel_vol['ammonium_nitrate'][i],
-                   rel_vol['organic_carbon'][i]]
+        colours = [rel_vol['ammonium_sulphate'][j],
+                   rel_vol['ammonium_nitrate'][j],
+                   rel_vol['organic_carbon'][j]]
 
-        lab = 'AS=' + str(rel_vol['ammonium_sulphate'][i]) + \
-            'AN=' + str(rel_vol['ammonium_nitrate'][i]) + \
-            'OC=' + str(rel_vol['organic_carbon'][i])
+        lab = 'AS=' + str(rel_vol['ammonium_sulphate'][j]) + '; ' +\
+            'AN=' + str(rel_vol['ammonium_nitrate'][j]) + '; ' +\
+            'OC=' + str(rel_vol['organic_carbon'][j])
 
         # plot it
         plt.semilogx(r_md_microm, Q_dry, color=colours, label=lab)
@@ -116,8 +121,6 @@ def main():
     plt.savefig(savedir + 'Q_ext_murk_sensitivity_' + str(ceil_lambda) + 'lam.png')
     # plt.close()
 
-    # plot the radius
-    plot_radius(savedir, r_md, r_m)
 
     print 'END PROGRAM'
 
