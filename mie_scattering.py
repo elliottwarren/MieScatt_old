@@ -195,9 +195,10 @@ def plot_radius(savedir, r_md, r_m):
 
     return
 
-def calc_Q(x, m,  type, y=[], m2=[],):
+def calc_Q_ext(x, m, type, y=[], m2=[],):
 
     """
+    Calculate Q_ext. Can be dry, coated in water, or deliquescent with water
 
     :param x: dry particle size parameter
     :param m: complex index of refraction for particle
@@ -219,28 +220,23 @@ def calc_Q(x, m,  type, y=[], m2=[],):
             Q = np.array([particle.qext() for particle in all_particles_coat])
 
         else:
-            pass
+            raise ValueError("type = coated, but y or m2 is empty []")
 
     # Calc extinction efficiency for dry aerosol (using r_md!!!! NOT r_m)
     # if singular, then type == complex, else type == array
-    elif type(m) == complex:
+    elif type == 'dry':
 
         all_particles_dry = [Mie(x=x, m=m) for x_i in x]
         Q = np.array([particle.qext() for particle in all_particles_dry])
-        calc_type = 'dry'
 
     # deliquescent aerosol (solute disolves as it takes on water)
-    elif len(x) == len(m):
+    elif type == 'deliquescent':
 
         all_particles_del = [Mie(x=x[i], m=m[i]) for i in np.arange(len(x))]
         Q = np.array([particle.qext() for particle in all_particles_del])
-        calc_type = 'deliquescent'
 
-    # return diagnostic information too?
-    if type == True:
-        return Q, calc_type
-    else:
-        return Q
+
+    return Q
 
 
 def main():
@@ -262,13 +258,14 @@ def main():
     # Setup
 
     # setup
-    ceil_lambda = [0.55e-06] # [m]
+    ceil_lambda = [0.91e-06] # [m]
     # ceil_lambda = np.arange(0.69e-06, 1.19e-06, 0.05e-06) # [m]
     B = 0.14
     RH_crit = 0.38
 
     # directories
     savedir = '/home/nerc/Documents/MieScatt/figures/'
+    datadir = '/home/nerc/Documents/MieScatt/data/'
 
     # aerosol with relative volume - average from the 4 Haywood et al 2008 flights
     rel_vol = {'ammonium_sulphate': 0.295,
@@ -277,8 +274,11 @@ def main():
 
 
     # create dry size distribution [m]
-    r_md_microm = np.arange(0.03, 5.001, 0.001)
-    r_md = r_md_microm*1.0e-06
+    # r_md_microm = np.arange(0.03, 5.001, 0.001) # .shape() = 4971
+    # r_md_microm = np.arange(0.000 + step, 1.000 + step, step), when step = 0.005, .shape() = 200
+    step = 0.005
+    r_md_microm = np.arange(0.000 + step, 1.000 + step, step)
+    r_md = r_md_microm * 1.0e-06
 
     # RH array [fraction]
     # This gets fixed for each Q iteration (Q needs to be recalculated for each RH used)
@@ -297,6 +297,10 @@ def main():
     x_store =[]
     n_store=[]
 
+    # -----------------------------------------------
+    # Calculate Q for each lambda
+    # -----------------------------------------------
+
     for lam in ceil_lambda:
 
         # -------------------------------------------------------------------
@@ -311,8 +315,8 @@ def main():
         # after calculating volumes used in MURK, can find relative % and do volume mixing.
 
         # bulk complex index of refraction (CIR) for the MURK species using volume mixing method
-        # n_murk = calc_n_murk(rel_vol, n_aerosol)
-        n_murk = complex(1.53, 0.007)
+        n_murk = calc_n_murk(rel_vol, n_aerosol)
+        # n_murk = complex(1.53, 0.007) - makes no sense as this is for 550 nm
         n_store += [n_murk]
 
         # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (910 nm) Hesse et al 1998
@@ -339,18 +343,17 @@ def main():
         all_particles_dry = [Mie(x=x_i, m=n_murk) for x_i in x_dry]
         Q_dry += [np.array([particle.qext() for particle in all_particles_dry])]
 
-        # original set
-        # # Calc extinction efficiency for dry aerosol (using r_md!!!! NOT r_m)
-        # all_particles_dry = [Mie(x=x_i, m=n_murk) for x_i in x_dry]
-        # Q_dry = np.array([particle.qext() for particle in all_particles_dry])
-        #
-        # # deliquescent aerosol (solute disolves as it takes on water)
-        # all_particles_del = [Mie(x=x_wet[i], m=n_swoll[i]) for i in np.arange(len(x_wet))]
-        # Q_del = np.array([particle.qext() for particle in all_particles_del])
-        #
-        # # coated aerosol (insoluble aerosol that gets coated as it takes on water)
-        # all_particles_coat = [Mie(x=x_dry[i], m=n_murk, y=x_wet[i], m2=n_water) for i in np.arange(len(x_wet))]
-        # Q_coat = np.array([particle.qext() for particle in all_particles_coat])
+    # -----------------------------------------------
+    # Post processing, saving and plotting
+    # -----------------------------------------------
+
+
+    # if running for single 910 nm wavelength, save the calculated Q
+    if type(ceil_lambda) == list:
+        if ceil_lambda[0] == 9.1e-07:
+            # save Q curve and radius [m]
+            np.savetxt(datadir + 'calculated_Q_ext_910nm.csv', np.transpose(np.vstack((r_md, Q_dry))), delimiter=',', header='radius,Q_ext')
+
 
     # plot
     fig = plt.figure(figsize=(7, 4.5))
@@ -358,22 +361,28 @@ def main():
     for Q_i, lam in zip(Q_dry, ceil_lambda):
 
         # plot it
-        ax = plt.semilogx(r_md_microm, Q_i, label=str(lam) + 'm')
+        plt.semilogx(r_md_microm, Q_i, label=str(lam) + 'm')
         # plt.semilogx(r_md_microm, Q_dry, label='dry murk', color=[0,0,0])
         # plt.semilogx(r_m_microm, Q_del, label='deliquescent murk (RH = ' + str(RH) + ')')
         # plt.semilogx(r_m_microm, Q_coat, label='coated murk (RH = ' + str(RH) + ')')
+
+    # average Q_dry if multiple Q_drys were calculated
+    if Q_dry.__len__() != 1:
+        q = np.array(Q_dry)
+        Q_dry_avg = np.mean(q, axis=0)
+        ax = plt.semilogx(r_md_microm, Q_dry_avg, label='average', color='black', linewidth=2)
 
     plt.title('lambda = ' + str(ceil_lambda[0]) + '-' + str(ceil_lambda[-1]) + 'm, n = murk')
     plt.xlabel('radius [micrometer]', labelpad=-5)
     plt.xlim([0.05, 5.0])
     plt.ylim([0.0, 5.0])
     plt.ylabel('Q_ext')
-    # plt.legend(fontsize=8, loc='best')
+    plt.legend(fontsize=8, loc='best')
     plt.grid(b=True, which='major', color='grey', linestyle='--')
     plt.grid(b=True, which='minor', color=[0.85, 0.85, 0.85], linestyle='--')
-    plt.savefig(savedir + 'Q_ext_(1.57-0.007i)_' + str(ceil_lambda[0]) + '-' + str(ceil_lambda[-1]) + 'lam.png')
+    plt.savefig(savedir + 'Q_ext_murk_CSVsaved_' + str(ceil_lambda[0]) + '-' + str(ceil_lambda[-1]) + 'lam.png')
     plt.tight_layout()
-    # plt.close()
+    plt.close()
 
     # plot the radius
     # plot_radius(savedir, r_md, r_m)
