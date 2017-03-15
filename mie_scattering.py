@@ -26,7 +26,7 @@ def linear_interpolate_n(particle, aim_lambda):
         from numpy import array
 
         # particle data dir
-        part_datadir = '/media/sf_HostGuestShared/complex index of refraction/'
+        part_datadir = '/media/sf_HostGuestShared/MieScatt/complex index of refraction/'
 
         # find particle filename
         if particle == 'ammonium_nitrate':
@@ -258,8 +258,9 @@ def main():
     # Setup
 
     # setup
-    ceil_lambda = [0.91e-06] # [m]
+    # ceil_lambda = [0.91e-06] # [m]
     # ceil_lambda = np.arange(0.69e-06, 1.19e-06, 0.05e-06) # [m]
+    ceil_lambda = np.arange(0.90e-06, 0.91e-06, 0.05e-08) # [m]
     B = 0.14
     RH_crit = 0.38
 
@@ -366,21 +367,23 @@ def main():
         # plt.semilogx(r_m_microm, Q_del, label='deliquescent murk (RH = ' + str(RH) + ')')
         # plt.semilogx(r_m_microm, Q_coat, label='coated murk (RH = ' + str(RH) + ')')
 
-    # average Q_dry if multiple Q_drys were calculated
-    if Q_dry.__len__() != 1:
-        q = np.array(Q_dry)
-        Q_dry_avg = np.mean(q, axis=0)
-        ax = plt.semilogx(r_md_microm, Q_dry_avg, label='average', color='black', linewidth=2)
+    # # average Q_dry if multiple Q_drys were calculated
+    # if Q_dry.__len__() != 1:
+    #     q = np.array(Q_dry)
+    #     Q_dry_avg = np.mean(q, axis=0)
+    #     ax = plt.semilogx(r_md_microm, Q_dry_avg, label='average', color='black', linewidth=2)
 
     plt.title('lambda = ' + str(ceil_lambda[0]) + '-' + str(ceil_lambda[-1]) + 'm, n = murk')
     plt.xlabel('radius [micrometer]', labelpad=-5)
     plt.xlim([0.05, 5.0])
     plt.ylim([0.0, 5.0])
+    #plt.xlim([0.01, 0.2])
+    #plt.ylim([0.0, 0.1])
     plt.ylabel('Q_ext')
     plt.legend(fontsize=8, loc='best')
     plt.grid(b=True, which='major', color='grey', linestyle='--')
     plt.grid(b=True, which='minor', color=[0.85, 0.85, 0.85], linestyle='--')
-    plt.savefig(savedir + 'Q_ext_murk_CSVsaved_' + str(ceil_lambda[0]) + '-' + str(ceil_lambda[-1]) + 'lam.png')
+    plt.savefig(savedir + 'Q_ext_murk_' + str(ceil_lambda[0]) + '-' + str(ceil_lambda[-1]) + 'lam.png')
     plt.tight_layout()
     plt.close()
 
