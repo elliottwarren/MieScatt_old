@@ -258,9 +258,10 @@ def main():
     # Setup
 
     # setup
-    # ceil_lambda = [0.91e-06] # [m]
+    ceil_lambda = [0.91e-06] # [m]
     # ceil_lambda = np.arange(0.69e-06, 1.19e-06, 0.05e-06) # [m]
-    ceil_lambda = np.arange(0.90e-06, 0.91e-06, 0.05e-08) # [m]
+    # ceil_lambda = np.arange(0.90e-06, 0.91e-06, 0.05e-08) # [m]
+    # ceil_lambda = np.array(([0.90e-06, 0.91e-06, 0.92e-06])) # [m]
     B = 0.14
     RH_crit = 0.38
 
@@ -277,8 +278,8 @@ def main():
     # create dry size distribution [m]
     # r_md_microm = np.arange(0.03, 5.001, 0.001) # .shape() = 4971
     # r_md_microm = np.arange(0.000 + step, 1.000 + step, step), when step = 0.005, .shape() = 200
-    step = 0.005
-    r_md_microm = np.arange(0.000 + step, 1.000 + step, step)
+    step = 0.0005
+    r_md_microm = np.arange(0.000 + step, 2.000 + step, step)
     r_md = r_md_microm * 1.0e-06
 
     # RH array [fraction]
@@ -318,22 +319,22 @@ def main():
         # bulk complex index of refraction (CIR) for the MURK species using volume mixing method
         n_murk = calc_n_murk(rel_vol, n_aerosol)
         # n_murk = complex(1.53, 0.007) - makes no sense as this is for 550 nm
-        n_store += [n_murk]
+        # n_store += [n_murk]
 
         # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (910 nm) Hesse et al 1998
         # n_water, _ = linear_interpolate_n('water', lam)
 
         # swell particles using FO method
         # rm = np.ma.ones(RH.shape) - (B / np.ma.log(RH_ge_RHcrit))
-        r_m = 1 - (B / np.log(RH))
-        r_m2 = np.ma.power(r_m, 1. / 3.)
-        r_m = np.ma.array(r_md) * r_m2
-        r_m_microm = r_m * 1.0e06
+        # r_m = 1 - (B / np.log(RH))
+        # r_m2 = np.ma.power(r_m, 1. / 3.)
+        # r_m = np.ma.array(r_md) * r_m2
+        # r_m_microm = r_m * 1.0e06
 
         # calculate size parameter for dry and wet
         x_dry = (2.0 * np.pi * r_md)/lam
         x_store += [x_dry]
-        x_wet = (2.0 * np.pi * r_m)/lam
+        # x_wet = (2.0 * np.pi * r_m)/lam
 
 
         # calculate swollen index of refraction using MURK
