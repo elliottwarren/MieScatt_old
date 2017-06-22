@@ -1,5 +1,10 @@
-__author__ = 'nerc'
+"""
+Carry out a simple Mie scattering calculation using the pymiecoated code used in Lally (2014).
+Complex index of refraction = CIR
 
+"""
+
+__author__ = 'nerc'
 
 
 
@@ -179,6 +184,36 @@ def calc_n_aerosol(aer, ceil_lambda):
 
     return n_aerosol
 
+# old version - incorrect proportions as it assumed to use the MURK equation, which was for equating NO2, SO2 and VOC
+# to MURK and WAS NOT meant to be used for equating (NH4)2SO4 (NH4)NO3 and OC to MURK.
+
+# def calc_n_murk(rel_vol, n):
+#
+#     """
+#     Calculate n_murk when inputed relative volumes
+#
+#     :param rel_vol:
+#     :return: n_murk
+#     """
+#
+#     # Absolute volume of each species used in calculating murk [m3]
+#     murk_vol_amm_sulph = rel_vol['ammonium_sulphate'] * 0.33
+#     murk_vol_amm_nit = rel_vol['ammonium_nitrate'] * 0.15
+#     murk_vol_org_carb = rel_vol['organic_carbon'] * 0.34
+#
+#     # scale absolute amounts to find relative volume of each used in MURK (so amm_sulph + amm_nit + org_carb = 1) [m3]
+#     scaler = 1.0/(murk_vol_amm_sulph + murk_vol_amm_nit + murk_vol_org_carb)
+#     rel_murk_vol_amm_sulph = scaler * murk_vol_amm_sulph
+#     rel_murk_vol_amm_nit = scaler * murk_vol_amm_nit
+#     rel_murk_vol_org_carb = scaler * murk_vol_org_carb
+#
+#     # volume mixing for CIR (eq. 12, Liu and Daum 2008) -> seem pretty good to quote for this and alt. methods
+#     n_murk = (rel_murk_vol_amm_sulph * n['ammonium_sulphate']) + (rel_murk_vol_amm_nit * n['ammonium_nitrate']) \
+#               + (rel_murk_vol_org_carb * n['organic_carbon'])
+#
+#     return n_murk
+
+
 def calc_n_murk(rel_vol, n):
 
     """
@@ -188,20 +223,10 @@ def calc_n_murk(rel_vol, n):
     :return: n_murk
     """
 
-    # Absolute volume of each species used in calculating murk [m3]
-    murk_vol_amm_sulph = rel_vol['ammonium_sulphate'] * 0.33
-    murk_vol_amm_nit = rel_vol['ammonium_nitrate'] * 0.15
-    murk_vol_org_carb = rel_vol['organic_carbon'] * 0.34
-
-    # scale absolute amounts to find relative volume of each used in MURK (so amm_sulph + amm_nit + org_carb = 1) [m3]
-    scaler = 1.0/(murk_vol_amm_sulph + murk_vol_amm_nit + murk_vol_org_carb)
-    rel_murk_vol_amm_sulph = scaler * murk_vol_amm_sulph
-    rel_murk_vol_amm_nit = scaler * murk_vol_amm_nit
-    rel_murk_vol_org_carb = scaler * murk_vol_org_carb
-
-    # volume mixing for CIR (eq. 12, Liu and Daum 2008) -> seem pretty good to quote for this and alt. methods
-    n_murk = (rel_murk_vol_amm_sulph * n['ammonium_sulphate']) + (rel_murk_vol_amm_nit * n['ammonium_nitrate']) \
-              + (rel_murk_vol_org_carb * n['organic_carbon'])
+    # volume mixing for CIR (eq. 12, Liu and Daum 2008) -> seem pretty good to quote for this as well as alt. methods
+    n_murk = (rel_vol['ammonium_sulphate'] * n['ammonium_sulphate']) + \
+             (rel_vol['ammonium_nitrate'] * n['ammonium_nitrate']) + \
+             (rel_vol['organic_carbon'] * n['organic_carbon'])
 
     return n_murk
 
@@ -263,14 +288,6 @@ def calc_Q_ext(x, m, type, y=[], m2=[],):
 
 
 def main():
-
-
-    """
-    Carry out a simple Mie scattering calculation using the pymiecoated code used in Lally (2014).
-    Complex index of refraction = CIR
-
-    :return: plots Mie scattering curve of murk, deliquecent and coated spheres at 80 % RH.
-    """
 
 
     import numpy as np
