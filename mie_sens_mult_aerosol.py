@@ -281,10 +281,10 @@ def main():
     # Setup
 
     # setup
-    ceil_lambda = [0.91e-06] # [m]
+    # ceil_lambda = [0.91e-06] # [m]
     # ceil_lambda = np.arange(0.69e-06, 1.19e-06, 0.05e-06) # [m]
     # ceil_lambda = np.arange(0.90e-06, 0.91e-06, 0.05e-08) # [m]
-    # ceil_lambda = np.array(([0.90e-06, 0.91e-06, 0.92e-06])) # [m]
+    ceil_lambda = np.array(([0.90e-06, 0.91e-06, 0.92e-06])) # [m]
     B = 0.14
     RH_crit = 0.38
 
@@ -298,7 +298,10 @@ def main():
                 'organic_carbon': 0.38}
 
     # all the aerosol types
-    all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'oceanic', 'biogenic', 'NaCl', 'soot']
+    # all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'oceanic', 'biogenic', 'NaCl', 'soot']
+    # all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'biogenic', 'NaCl', 'soot']
+    all_aer = {'ammonium_sulphate': 'red', 'ammonium_nitrate':'orange', 'organic_carbon': 'green',
+               'biogenic': 'cyan', 'NaCl': 'magenta', 'soot': 'brown'}
     # all_aer = ['soot']
 
     # create dry size distribution [m]
@@ -346,7 +349,8 @@ def main():
     # bulk complex index of refraction (CIR) for the MURK species using volume mixing method
     n_murk = calc_n_murk(rel_vol, n_aerosol)
     n_aerosol['MURK'] = n_murk
-    # n_murk = complex(1.53, 0.007) - makes no sense as this is for 550 nm
+    all_aer['MURK'] = 'black' # add color for plotting
+    # n_murk = complex(1.53, 0.007) - this is for 550 nm
     n_store += [n_murk]
 
     # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (910 nm) Hesse et al 1998
@@ -397,7 +401,7 @@ def main():
     for aer_i, Q_dry_i in Q_dry.iteritems():
 
         # plot it
-        plt.semilogx(r_md_microm, Q_dry_i, label=aer_i)
+        plt.semilogx(r_md_microm, Q_dry_i, label=aer_i, color=all_aer[aer_i])
         # plt.semilogx(r_md_microm, Q_dry, label='dry murk', color=[0,0,0])
         # plt.semilogx(r_m_microm, Q_del, label='deliquescent murk (RH = ' + str(RH) + ')')
         # plt.semilogx(r_m_microm, Q_coat, label='coated murk (RH = ' + str(RH) + ')')
@@ -408,13 +412,13 @@ def main():
     #     Q_dry_avg = np.mean(q, axis=0)
     #     ax = plt.semilogx(r_md_microm, Q_dry_avg, label='average', color='black', linewidth=2)
 
-    plt.title('lambda = ' + str(ceil_lambda[0]) + 'nm')
-    plt.xlabel('radius [micrometer]', labelpad=-5)
+    # plt.title('lambda = ' + str(ceil_lambda[0]) + 'nm')
+    plt.xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=-5)
     plt.xlim([0.05, 5.0])
     plt.ylim([0.0, 5.0])
     #plt.xlim([0.01, 0.2])
     #plt.ylim([0.0, 0.1])
-    plt.ylabel('Q_ext')
+    plt.ylabel(r'$Q_{ext}(dry)$')
     plt.legend(fontsize=8, loc='best')
     plt.grid(b=True, which='major', color='grey', linestyle='--')
     plt.grid(b=True, which='minor', color=[0.85, 0.85, 0.85], linestyle='--')
