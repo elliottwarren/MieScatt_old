@@ -2,10 +2,13 @@
 Carry out a simple Mie scattering calculation using the pymiecoated code used in Lally (2014).
 Complex index of refraction = CIR
 
+Revisions
+July 16 - old version of calc_n_murk () incorrect proportions as it assumed to use the MURK equation, which was for equating NO2, SO2 and VOC
+          to MURK and WAS NOT meant to be used for equating (NH4)2SO4 (NH4)NO3 and OC to MURK.This has been fixed.
+
 """
 
-__author__ = 'nerc'
-
+__author__ = 'elliott_warren'
 
 
 def linear_interpolate_n(particle, aim_lambda):
@@ -38,19 +41,19 @@ def linear_interpolate_n(particle, aim_lambda):
         part_datadir = '/home/nerc/Documents/MieScatt/aerosol_files/'
 
         # find particle filename
-        if particle == 'ammonium_nitrate':
+        if particle == 'Ammonium nitrate':
             part_file = 'refract_ammoniumnitrate'
-        elif particle == 'ammonium_sulphate':
+        elif particle == 'Ammonium sulphate':
             part_file = 'refract_ammoniumsulphate'
-        elif particle == 'organic_carbon':
+        elif particle == 'Organic carbon':
             part_file = 'refract_ocff'
-        elif particle == 'oceanic':
+        elif particle == 'Oceanic':
             part_file = 'refract_oceanic'
-        elif particle == 'soot':
+        elif particle == 'Soot':
             part_file = 'refract_soot_bond'
-        elif particle == 'biogenic':
+        elif particle == 'Biogenic':
             part_file = 'refract_biogenic'
-        elif particle == 'NaCl':
+        elif particle == 'Generic NaCl':
             part_file = 'refract_nacl'
         elif particle == 'water':
             part_file = 'refract_water.txt'
@@ -184,35 +187,6 @@ def calc_n_aerosol(aer, ceil_lambda):
 
     return n_aerosol
 
-# old version - incorrect proportions as it assumed to use the MURK equation, which was for equating NO2, SO2 and VOC
-# to MURK and WAS NOT meant to be used for equating (NH4)2SO4 (NH4)NO3 and OC to MURK.
-
-# def calc_n_murk(rel_vol, n):
-#
-#     """
-#     Calculate n_murk when inputed relative volumes
-#
-#     :param rel_vol:
-#     :return: n_murk
-#     """
-#
-#     # Absolute volume of each species used in calculating murk [m3]
-#     murk_vol_amm_sulph = rel_vol['ammonium_sulphate'] * 0.33
-#     murk_vol_amm_nit = rel_vol['ammonium_nitrate'] * 0.15
-#     murk_vol_org_carb = rel_vol['organic_carbon'] * 0.34
-#
-#     # scale absolute amounts to find relative volume of each used in MURK (so amm_sulph + amm_nit + org_carb = 1) [m3]
-#     scaler = 1.0/(murk_vol_amm_sulph + murk_vol_amm_nit + murk_vol_org_carb)
-#     rel_murk_vol_amm_sulph = scaler * murk_vol_amm_sulph
-#     rel_murk_vol_amm_nit = scaler * murk_vol_amm_nit
-#     rel_murk_vol_org_carb = scaler * murk_vol_org_carb
-#
-#     # volume mixing for CIR (eq. 12, Liu and Daum 2008) -> seem pretty good to quote for this and alt. methods
-#     n_murk = (rel_murk_vol_amm_sulph * n['ammonium_sulphate']) + (rel_murk_vol_amm_nit * n['ammonium_nitrate']) \
-#               + (rel_murk_vol_org_carb * n['organic_carbon'])
-#
-#     return n_murk
-
 
 def calc_n_murk(rel_vol, n):
 
@@ -224,9 +198,9 @@ def calc_n_murk(rel_vol, n):
     """
 
     # volume mixing for CIR (eq. 12, Liu and Daum 2008) -> seem pretty good to quote for this as well as alt. methods
-    n_murk = (rel_vol['ammonium_sulphate'] * n['ammonium_sulphate']) + \
-             (rel_vol['ammonium_nitrate'] * n['ammonium_nitrate']) + \
-             (rel_vol['organic_carbon'] * n['organic_carbon'])
+    n_murk = (rel_vol['Ammonium sulphate'] * n['Ammonium sulphate']) + \
+             (rel_vol['Ammonium nitrate'] * n['Ammonium nitrate']) + \
+             (rel_vol['Organic carbon'] * n['Organic carbon'])
 
     return n_murk
 
@@ -298,7 +272,7 @@ def main():
     # Setup
 
     # setup
-    ceil_lambda = [0.91e-06] # [m]
+    ceil_lambda = [0.905e-06] # [m]
     # ceil_lambda = np.arange(0.69e-06, 1.19e-06, 0.05e-06) # [m]
     # ceil_lambda = np.arange(0.90e-06, 0.91e-06, 0.05e-08) # [m]
     # ceil_lambda = np.array(([0.90e-06, 0.91e-06, 0.92e-06])) # [m]
@@ -310,15 +284,15 @@ def main():
     datadir = '/home/nerc/Documents/MieScatt/data/'
 
     # aerosol with relative volume - average from the 4 Haywood et al 2008 flights
-    rel_vol = {'ammonium_sulphate': 0.295,
-               'ammonium_nitrate': 0.325,
-                'organic_carbon': 0.38}
+    rel_vol = {'Ammonium sulphate': 0.295,
+               'Ammonium nitrate': 0.325,
+                'Organic carbon': 0.38}
 
     # all the aerosol types
     # all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'oceanic', 'biogenic', 'NaCl', 'soot']
     # all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'biogenic', 'NaCl', 'soot']
-    all_aer = {'ammonium_sulphate': 'red', 'ammonium_nitrate':'orange', 'organic_carbon': 'green',
-               'biogenic': 'blue', 'NaCl': 'magenta', 'soot': 'brown'}
+    all_aer = {'Ammonium sulphate': 'red', 'Ammonium nitrate':'orange', 'Organic carbon': [0.05, 0.9, 0.4],
+               'Biogenic': [0.05,0.56,0.85], 'Generic NaCl': 'magenta', 'Soot': 'brown'}
     # all_aer = ['soot']
 
     # create dry size distribution [m]
@@ -346,7 +320,7 @@ def main():
     n_store=[]
 
     # save the Q(dry) curve for MURK?
-    savedata = False
+    savedata = True
 
     # -----------------------------------------------
     # Calculate Q for each lambda
@@ -370,7 +344,7 @@ def main():
     # n_murk = complex(1.53, 0.007) - this is for 550 nm
     n_store += [n_murk]
 
-    # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (910 nm) Hesse et al 1998
+    # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (905 nm) Hesse et al 1998
     # n_water, _ = linear_interpolate_n('water', lam)
 
     # swell particles using FO method
@@ -404,12 +378,12 @@ def main():
     # -----------------------------------------------
 
 
-    # if running for single 910 nm wavelength, save the calculated Q
+    # if running for single 905 nm wavelength, save the calculated Q
     if savedata == True:
         if type(ceil_lambda) == list:
-            if ceil_lambda[0] == 9.1e-07:
+            if ceil_lambda[0] == 0.905e-06:
                 # save Q curve and radius [m]
-                np.savetxt(datadir + 'calculated_Q_ext_910nm.csv', np.transpose(np.vstack((r_md, Q_dry['MURK']))), delimiter=',', header='radius,Q_ext')
+                np.savetxt(datadir + 'calculated_Q_ext_905nm.csv', np.transpose(np.vstack((r_md, Q_dry['MURK']))), delimiter=',', header='radius,Q_ext')
 
 
     # plot
@@ -430,17 +404,18 @@ def main():
     #     ax = plt.semilogx(r_md_microm, Q_dry_avg, label='average', color='black', linewidth=2)
 
     # plt.title('lambda = ' + str(ceil_lambda[0]) + 'nm')
-    plt.xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=-10, fontsize=20)
+    plt.xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=-10, fontsize=13)
     plt.xlim([0.05, 5.0])
     plt.ylim([0.0, 5.0])
     #plt.xlim([0.01, 0.2])
     #plt.ylim([0.0, 0.1])
-    plt.ylabel(r'$Q_{ext,dry}$', fontsize=15)
-    # plt.legend(fontsize=8, loc='best')
-    plt.tick_params(axis='both',labelsize=15)
+    plt.ylabel(r'$Q_{ext,dry}$', fontsize=13)
+    plt.legend(fontsize=8, loc='best')
+    plt.tick_params(axis='both',labelsize=10)
     plt.grid(b=True, which='major', color='grey', linestyle='--')
     plt.grid(b=True, which='minor', color=[0.85, 0.85, 0.85], linestyle='--')
     plt.savefig(savedir + 'Q_ext_manyAer_' + str(ceil_lambda[0]) + 'nm.png')
+    print 'data dir is... ' + savedir + 'Q_ext_manyAer_' + str(ceil_lambda[0]) + 'nm.png'
     plt.tight_layout(h_pad=10.0)
     plt.close()
 
