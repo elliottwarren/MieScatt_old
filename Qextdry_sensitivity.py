@@ -8,6 +8,28 @@ __author__ = 'nerc'
 
 
 
+import numpy as np
+from pymiecoated import Mie
+import matplotlib.pyplot as plt
+import ellUtils as eu
+
+
+def create_colours(intervals):
+
+    r = 0.2
+    g = 0.5
+
+    step = 1.0 / intervals
+
+    b_colours = np.arange(0.0, 1.0 + step, step)
+    g_colours = np.arange(1.0, 0.0 - step, -step)
+
+    g_colours[-1] = 0.0
+
+    colours = [[r, g_colours[i], b_colours[i]] for i in range(len(b_colours))]
+
+    return colours
+
 def linear_interpolate_n(particle, aim_lambda):
 
     """
@@ -60,8 +82,6 @@ def linear_interpolate_n(particle, aim_lambda):
         # full path
         file_path = part_datadir + part_file
 
-        if particle == 'soot':
-            1
 
         # empty dictionary to hold data
         data = {'lambda': [],
@@ -257,12 +277,162 @@ def calc_Q_ext(x, m, type, y=[], m2=[],):
     return Q
 
 
+# plotting
+
+def plot_one_aer_i(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra=''):
+
+    """Plot the absolute Q_dry_ext values"""
+
+    fig, ax = plt.subplots(1, 1, figsize=(8, 7))
+
+    lam_colours = create_colours(len(ceil_lambda) -1)
+
+    for ax_i, aer_i in zip(ax.flatten(), all_aer_constits + ['MURK']):
+
+        for lam_i, lam_i_colour in zip(ceil_lambda_str, lam_colours):
+
+            ax_i.semilogx(r_md_microm, Q_dry[aer_i][lam_i], label=lam_i + ' nm', color=lam_i_colour)
+            ax_i.set_xlim([0.05, 4.0])
+            ax_i.set_ylim([0.0, 5.0])
+
+        # subplot prettify
+        ax_i.set_title(aer_i)
+
+
+
+    # figure prettify
+    ax_main = eu.fig_majorAxis(fig)
+
+    ax_main.set_xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=5)
+    ax_main.set_ylabel(r'$Q_{ext}(dry)$')
+    ax.flatten()[1].legend(fontsize=8, bbox_to_anchor=(1.07, 1), loc=2, borderaxespad=0.0)
+    fig.suptitle('Absolute (lam_i)')
+
+    plt.tight_layout(h_pad=0.1)
+    plt.subplots_adjust(top=0.9, right=0.8)
+
+    plt.savefig(savedir + 'Q_extdry_multiLam_abs_sensitivity'+extra+'.png')
+    plt.close()
+
+
+
+    return
+
+def plot_absolute(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra=''):
+
+    """Plot the absolute Q_dry_ext values"""
+
+    fig, ax = plt.subplots(3, 2, figsize=(8, 7))
+
+    lam_colours = create_colours(len(ceil_lambda) -1)
+
+    for ax_i, aer_i in zip(ax.flatten(), all_aer_constits + ['MURK']):
+
+        for lam_i, lam_i_colour in zip(ceil_lambda_str, lam_colours):
+
+            ax_i.semilogx(r_md_microm, Q_dry[aer_i][lam_i], label=lam_i + ' nm', color=lam_i_colour)
+            ax_i.set_xlim([0.05, 4.0])
+            ax_i.set_ylim([0.0, 5.0])
+
+        # subplot prettify
+        ax_i.set_title(aer_i)
+
+
+
+    # figure prettify
+    ax_main = eu.fig_majorAxis(fig)
+
+    ax_main.set_xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=5)
+    ax_main.set_ylabel(r'$Q_{ext}(dry)$')
+    ax.flatten()[1].legend(fontsize=8, bbox_to_anchor=(1.07, 1), loc=2, borderaxespad=0.0)
+    fig.suptitle('Absolute (lam_i)')
+
+    plt.tight_layout(h_pad=0.1)
+    plt.subplots_adjust(top=0.9, right=0.8)
+
+    plt.savefig(savedir + 'Q_extdry_multiLam_abs_sensitivity'+extra+'.png')
+    plt.close()
+
+
+
+    return
+
+def plot_diff(r_md_microm, Q_diff, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra=''):
+
+    """Plot the absolute Q_dry_ext values"""
+
+    fig, ax = plt.subplots(3, 2, figsize=(8, 7))
+
+    lam_colours = create_colours(len(ceil_lambda) -1)
+
+    for ax_i, aer_i in zip(ax.flatten(), all_aer_constits + ['MURK']):
+
+        for lam_i, lam_i_colour in zip(ceil_lambda_str, lam_colours):
+
+            ax_i.semilogx(r_md_microm, Q_diff[aer_i][lam_i], label=lam_i + ' nm', color=lam_i_colour)
+            ax_i.set_xlim([0.05, 4.0])
+            # ax_i.set_ylim([0.0, 5.0])
+
+        # subplot prettify
+        ax_i.set_title(aer_i)
+
+
+
+    # figure prettify
+    ax_main = eu.fig_majorAxis(fig)
+
+    ax_main.set_xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=5)
+    ax_main.set_ylabel(r'$Q_{ext}(dry)$')
+    ax.flatten()[1].legend(fontsize=8, bbox_to_anchor=(1.07, 1), loc=2, borderaxespad=0.0)
+    fig.suptitle('Difference (lam_i - lam_910)')
+
+    plt.tight_layout(h_pad=0.1)
+    plt.subplots_adjust(top=0.9, right=0.8)
+
+    plt.savefig(savedir + 'Q_extdry_multiLam_diff_sensitivity'+extra+'.png')
+    plt.close()
+
+
+
+    return
+
+def plot_ratio(r_md_microm, Q_ratio, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra=''):
+
+    """Plot the absolute Q_dry_ext values"""
+
+    fig, ax = plt.subplots(3, 2, figsize=(8, 7))
+
+    lam_colours = create_colours(len(ceil_lambda) -1)
+
+    for ax_i, aer_i in zip(ax.flatten(), all_aer_constits + ['MURK']):
+
+        for lam_i, lam_i_colour in zip(ceil_lambda_str, lam_colours):
+
+            ax_i.semilogx(r_md_microm, Q_ratio[aer_i][lam_i], label=lam_i + ' nm', color=lam_i_colour)
+            ax_i.set_xlim([0.05, 10.0])
+            # ax_i.set_ylim([0.0, 5.0])
+
+        # subplot prettify
+        ax_i.set_title(aer_i)
+
+
+
+    # figure prettify
+    ax_main = eu.fig_majorAxis(fig)
+
+    ax_main.set_xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=5)
+    ax_main.set_ylabel(r'$Q_{ext}(dry)$')
+    ax.flatten()[1].legend(fontsize=8, bbox_to_anchor=(1.07, 1), loc=2, borderaxespad=0.0)
+    fig.suptitle('Ratio (lam_i / lam_910)')
+
+    plt.tight_layout(h_pad=0.1)
+    plt.subplots_adjust(top=0.9, right=0.8)
+
+    plt.savefig(savedir + 'Q_extdry_multiLam_ratio_sensitivity_10micronscale'+extra+'.png')
+    plt.close()
+
 def main():
 
-
-    import numpy as np
-    from pymiecoated import Mie
-    import matplotlib.pyplot as plt
 
     # -------------------------------------------------------------------
     # Setup
@@ -270,9 +440,14 @@ def main():
     # setup
     # ceil_lambda = [0.91e-06] # [m]
     # ceil_lambda = np.arange(0.69e-06, 1.19e-06, 0.05e-06) # [m]
-    ceil_lambda = np.arange(8.95e-07, 9.15e-07, 1.0e-09) # [m]
-    B = 0.14
-    RH_crit = 0.38
+    # ceil_lambda = np.arange(8.95e-07, 9.16e-07, 1.0e-09) # [m]
+    ceil_lambda = np.array([905e-09, 910e-09, 1064e-09])
+
+
+    ceil_lambda_str = ['%d' % i for i in ceil_lambda * 1.0e9]
+
+    # extra =''
+    extra = '_largelam'
 
     # directories
     savedir = '/home/nerc/Documents/MieScatt/figures/'
@@ -288,21 +463,39 @@ def main():
     all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'NaCl', 'soot']
     # all_aer = {'ammonium_sulphate': 'red', 'ammonium_nitrate':'orange', 'organic_carbon': 'green',
     #            'biogenic': 'cyan', 'NaCl': 'magenta', 'soot': 'brown'}
-    # all_aer = ['soot']
+    all_aer = {'ammonium_sulphate': 'red', 'ammonium_nitrate':'orange', 'organic_carbon': 'green',
+               'NaCl': 'magenta', 'soot': 'brown', 'MURK': 'black'}
+
+    all_aer_constits = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'NaCl', 'soot']
 
     # create dry size distribution [m]
     # r_md_microm = np.arange(0.03, 5.001, 0.001) # .shape() = 4971
     # r_md_microm = np.arange(0.000 + step, 1.000 + step, step), when step = 0.005, .shape() = 200
     step = 0.005
-    r_md_microm = np.arange(0.000 + step, 5.000 + step, step)
+    r_md_microm = np.arange(0.000 + step, 10.000 + step, step)
     r_md = r_md_microm * 1.0e-06
 
 
     # define array to store Q for each wavelength
-    Q_dry = []
+    Q_dry = {}
+    Q_diff = {}
+    Q_ratio = {}
 
-    x_store =[]
-    n_store=[]
+
+    # make each, first level key (i.e. Q_dry[firstkey]) the aerosol type, followed later by the wavelength [nm].
+    for aer_i in all_aer.iterkeys():
+
+        Q_dry[aer_i] = {}
+        Q_diff[aer_i] = {}
+        Q_ratio[aer_i] = {}
+
+        for lam_i in ceil_lambda_str:
+
+            Q_dry[aer_i][lam_i] = []
+            Q_diff[aer_i][lam_i] = []
+            Q_ratio[aer_i][lam_i] = []
+
+
 
     # save the Q(dry) curve for MURK?
     savedata = False
@@ -311,46 +504,51 @@ def main():
     # Calculate Q for each lambda
     # -----------------------------------------------
 
-    # -------------------------------------------------------------------
-    # Process
+    for lam, lam_str in zip(ceil_lambda, ceil_lambda_str):
 
-    # calculate complex index of refraction for MURK species
-    # output n is complex index of refraction (n + ik)
-    n_aerosol = calc_n_aerosol(all_aer, ceil_lambda)
+        print '\n lam_i = ' + lam_str + ' nm'
+        # -------------------------------------------------------------------
+        # Process
 
-    # NOTE: Able to use volume in MURK equation instead of mass because, if mass is evenly distributed within a volume
-    # then taking x of the mass = taking x of the volume.
-    # after calculating volumes used in MURK, can find relative % and do volume mixing.
+        # calculate complex index of refraction for MURK species
+        # output n is complex index of refraction (n + ik)
+        n_aerosol = calc_n_aerosol(all_aer_constits, lam)
 
-    # bulk complex index of refraction (CIR) for the MURK species using volume mixing method
-    n_murk = calc_n_murk(rel_vol, n_aerosol)
-    n_aerosol['MURK'] = n_murk
-    all_aer['MURK'] = 'black' # add color for plotting
-    # n_murk = complex(1.53, 0.007) - this is for 550 nm
-    n_store += [n_murk]
+        # NOTE: Able to use volume in MURK equation instead of mass because, if mass is evenly distributed within a volume
+        # then taking x of the mass = taking x of the volume.
+        # after calculating volumes used in MURK, can find relative % and do volume mixing.
 
-    # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (910 nm) Hesse et al 1998
-    # n_water, _ = linear_interpolate_n('water', lam)
+        # bulk complex index of refraction (CIR) for the MURK species using volume mixing method
+        n_murk = calc_n_murk(rel_vol, n_aerosol)
+        n_aerosol['MURK'] = n_murk
+        # n_murk = complex(1.53, 0.007) - this is for 550 nm
+        # n_store += [n_murk]
 
-    # calculate size parameter for dry and wet
-    x_dry = (2.0 * np.pi * r_md)/ceil_lambda
-    x_store += [x_dry]
+        # complex indices of refraction (n = n(bar) - ik) at ceilometer wavelength (910 nm) Hesse et al 1998
+        # n_water, _ = linear_interpolate_n('water', lam)
 
-
-    # calculate swollen index of refraction using MURK
-    # n_swoll = CIR_Hanel(n_water, n_murk, r_md, r_m)
+        # calculate size parameter for dry and wet
+        x_dry = (2.0 * np.pi * r_md)/lam
+        # x_store += [x_dry]
 
 
-    # Calc extinction efficiency for dry aerosol (using r_md!!!! NOT r_m)
-    # all_particles_dry = [Mie(x=x_i, m=n_murk) for x_i in x_dry]
-    # Q_dry += [np.array([particle.qext() for particle in all_particles_dry])]
+        # calculate swollen index of refraction using MURK
+        # n_swoll = CIR_Hanel(n_water, n_murk, r_md, r_m)
 
-    Q_dry = {}
-    for key, n_i in n_aerosol.iteritems():
-        all_particles_dry = [Mie(x=x_i, m=n_i) for x_i in x_dry]
-        Q_dry[key] = np.array([particle.qext() for particle in all_particles_dry])
 
-    # qsca, qabs
+        # Calc extinction efficiency for dry aerosol (using r_md!!!! NOT r_m)
+        for aer_i, n_i in n_aerosol.iteritems():
+            all_particles_dry = [Mie(x=x_i, m=n_i) for x_i in x_dry]
+            Q_dry[aer_i][lam_str] = np.array([particle.qext() for particle in all_particles_dry])
+
+    # once 910 has been calcualted
+    for aer_i, value in Q_dry.iteritems():
+        for lam_str_i in ceil_lambda_str:
+            Q_diff[aer_i][lam_str_i]  = Q_dry[aer_i][lam_str_i] - Q_dry[aer_i]['910']
+            Q_ratio[aer_i][lam_str_i] = Q_dry[aer_i][lam_str_i] / Q_dry[aer_i]['910']
+
+    # qsca, qabs are alternatives to qext
+
     # -----------------------------------------------
     # Post processing, saving and plotting
     # -----------------------------------------------
@@ -365,35 +563,14 @@ def main():
 
 
     # plot
-    fig = plt.figure(figsize=(7, 4.5))
+    # plot_one_aer_i
 
-    for aer_i, Q_dry_i in Q_dry.iteritems():
+    plot_absolute(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra)
 
-        # plot it
-        plt.semilogx(r_md_microm, Q_dry_i, label=aer_i, color=all_aer[aer_i])
-        # plt.semilogx(r_md_microm, Q_dry, label='dry murk', color=[0,0,0])
-        # plt.semilogx(r_m_microm, Q_del, label='deliquescent murk (RH = ' + str(RH) + ')')
-        # plt.semilogx(r_m_microm, Q_coat, label='coated murk (RH = ' + str(RH) + ')')
+    plot_diff(r_md_microm, Q_diff, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra)
 
-    # # average Q_dry if multiple Q_drys were calculated
-    # if Q_dry.__len__() != 1:
-    #     q = np.array(Q_dry)
-    #     Q_dry_avg = np.mean(q, axis=0)
-    #     ax = plt.semilogx(r_md_microm, Q_dry_avg, label='average', color='black', linewidth=2)
+    plot_ratio(r_md_microm, Q_ratio, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra)
 
-    # plt.title('lambda = ' + str(ceil_lambda[0]) + 'nm')
-    plt.xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=-5)
-    plt.xlim([0.05, 5.0])
-    plt.ylim([0.0, 5.0])
-    #plt.xlim([0.01, 0.2])
-    #plt.ylim([0.0, 0.1])
-    plt.ylabel(r'$Q_{ext}(dry)$')
-    plt.legend(fontsize=8, loc='best')
-    plt.grid(b=True, which='major', color='grey', linestyle='--')
-    plt.grid(b=True, which='minor', color=[0.85, 0.85, 0.85], linestyle='--')
-    plt.savefig(savedir + 'Q_ext_manyAer_' + str(ceil_lambda[0]) + 'nm.png')
-    plt.tight_layout()
-    plt.close()
 
     # plot the radius
     # plot_radius(savedir, r_md, r_m)
