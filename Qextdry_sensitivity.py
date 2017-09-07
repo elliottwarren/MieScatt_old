@@ -11,6 +11,8 @@ __author__ = 'nerc'
 import numpy as np
 from pymiecoated import Mie
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FormatStrFormatter
+
 import ellUtils as eu
 
 
@@ -279,7 +281,7 @@ def calc_Q_ext(x, m, type, y=[], m2=[],):
 
 # plotting
 
-def plot_one_aer_i(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra=''):
+def plot_one_aer_i(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_constits, aer_names, savedir, extra=''):
 
     """Plot the absolute Q_dry_ext values"""
 
@@ -318,7 +320,7 @@ def plot_one_aer_i(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_con
 
     return
 
-def plot_absolute(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra=''):
+def plot_absolute(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_constits, aer_names, savedir, extra=''):
 
     """Plot the absolute Q_dry_ext values"""
 
@@ -357,7 +359,7 @@ def plot_absolute(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_cons
 
     return
 
-def plot_diff(r_md_microm, Q_diff, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra=''):
+def plot_diff(r_md_microm, Q_diff, ceil_lambda, ceil_lambda_str, all_aer_constits, aer_names, savedir, extra=''):
 
     """Plot the absolute Q_dry_ext values"""
 
@@ -396,7 +398,7 @@ def plot_diff(r_md_microm, Q_diff, ceil_lambda, ceil_lambda_str, all_aer_constit
 
     return
 
-def plot_ratio(r_md_microm, Q_ratio, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra=''):
+def plot_ratio(r_md_microm, Q_ratio, ceil_lambda, ceil_lambda_str, all_aer_constits, aer_names, savedir, extra=''):
 
     """Plot the absolute Q_dry_ext values"""
 
@@ -410,20 +412,21 @@ def plot_ratio(r_md_microm, Q_ratio, ceil_lambda, ceil_lambda_str, all_aer_const
 
             ax_i.semilogx(r_md_microm, Q_ratio[aer_i][lam_i], label=lam_i + ' nm', color=lam_i_colour)
             ax_i.set_xlim([0.05, 10.0])
-            # ax_i.set_ylim([0.0, 5.0])
+            ax_i.set_ylim([0.4, 2.0])
 
         # subplot prettify
-        ax_i.set_title(aer_i)
+        ax_i.set_title(aer_names[aer_i], fontsize=12)
+        ax_i.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
 
 
     # figure prettify
     ax_main = eu.fig_majorAxis(fig)
 
-    ax_main.set_xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=5)
-    ax_main.set_ylabel(r'$Q_{ext}(dry)$')
-    ax.flatten()[1].legend(fontsize=8, bbox_to_anchor=(1.07, 1), loc=2, borderaxespad=0.0)
-    fig.suptitle('Ratio (lam_i / lam_910)')
+    ax_main.set_xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', fontsize=16, labelpad=5)
+    ax_main.set_ylabel(r'$\frac{Q_{ext,dry}(\lambda=i)}{Q_{ext,dry}(\lambda=905\/nm)}$', labelpad=15, fontsize=19)
+    ax.flatten()[1].legend(fontsize=10, bbox_to_anchor=(1.07, 1), loc=2, borderaxespad=0.0)
+    # fig.suptitle('Ratio (lam_i / lam_905)')
 
     plt.tight_layout(h_pad=0.1)
     plt.subplots_adjust(top=0.9, right=0.8)
@@ -441,7 +444,7 @@ def main():
     # ceil_lambda = [0.91e-06] # [m]
     # ceil_lambda = np.arange(0.69e-06, 1.19e-06, 0.05e-06) # [m]
     # ceil_lambda = np.arange(8.95e-07, 9.16e-07, 1.0e-09) # [m]
-    ceil_lambda = np.array([905e-09, 910e-09, 1064e-09])
+    ceil_lambda = np.array([905e-09, 1064e-09])
 
 
     ceil_lambda_str = ['%d' % i for i in ceil_lambda * 1.0e9]
@@ -460,12 +463,12 @@ def main():
 
     # all the aerosol types
     # all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'oceanic', 'biogenic', 'NaCl', 'soot']
-    all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'NaCl', 'soot']
+    aer_names = {'ammonium_sulphate': 'Ammonium sulphate', 'ammonium_nitrate': 'Ammonium nitrate',
+                'organic_carbon': 'Organic carbon', 'NaCl': 'Generic NaCl', 'soot':'Soot', 'MURK': 'MURK'}
     # all_aer = {'ammonium_sulphate': 'red', 'ammonium_nitrate':'orange', 'organic_carbon': 'green',
     #            'biogenic': 'cyan', 'NaCl': 'magenta', 'soot': 'brown'}
     all_aer = {'ammonium_sulphate': 'red', 'ammonium_nitrate':'orange', 'organic_carbon': 'green',
                'NaCl': 'magenta', 'soot': 'brown', 'MURK': 'black'}
-
     all_aer_constits = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'NaCl', 'soot']
 
     # create dry size distribution [m]
@@ -544,8 +547,8 @@ def main():
     # once 910 has been calcualted
     for aer_i, value in Q_dry.iteritems():
         for lam_str_i in ceil_lambda_str:
-            Q_diff[aer_i][lam_str_i]  = Q_dry[aer_i][lam_str_i] - Q_dry[aer_i]['910']
-            Q_ratio[aer_i][lam_str_i] = Q_dry[aer_i][lam_str_i] / Q_dry[aer_i]['910']
+            Q_diff[aer_i][lam_str_i]  = Q_dry[aer_i][lam_str_i] - Q_dry[aer_i]['905']
+            Q_ratio[aer_i][lam_str_i] = Q_dry[aer_i][lam_str_i] / Q_dry[aer_i]['905']
 
     # qsca, qabs are alternatives to qext
 
@@ -554,22 +557,14 @@ def main():
     # -----------------------------------------------
 
 
-    # if running for single 910 nm wavelength, save the calculated Q
-    if savedata == True:
-        if type(ceil_lambda) == list:
-            if ceil_lambda[0] == 9.1e-07:
-                # save Q curve and radius [m]
-                np.savetxt(datadir + 'calculated_Q_ext_910nm.csv', np.transpose(np.vstack((r_md, Q_dry['MURK']))), delimiter=',', header='radius,Q_ext')
-
-
     # plot
     # plot_one_aer_i
 
-    plot_absolute(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra)
+    plot_absolute(r_md_microm, Q_dry, ceil_lambda, ceil_lambda_str, all_aer_constits, aer_names, savedir, extra)
 
-    plot_diff(r_md_microm, Q_diff, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra)
+    plot_diff(r_md_microm, Q_diff, ceil_lambda, ceil_lambda_str, all_aer_constits, aer_names, savedir, extra)
 
-    plot_ratio(r_md_microm, Q_ratio, ceil_lambda, ceil_lambda_str, all_aer_constits, savedir, extra)
+    plot_ratio(r_md_microm, Q_ratio, ceil_lambda, ceil_lambda_str, all_aer_constits, aer_names, savedir, extra)
 
 
     # plot the radius
