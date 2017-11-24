@@ -12,8 +12,6 @@ import numpy as np
 import datetime as dt
 
 import ellUtils as eu
-from forward_operator import FOUtils as FO
-from forward_operator import FOconstants as FOcon
 
 # Read
 def read_mass_data(massdatadir, year):
@@ -364,18 +362,18 @@ def main():
 
     # which modelled data to read in
     model_type = 'UKV'
-    res = FOcon.model_resolution[model_type]
 
     # directories
-    maindir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/'
-    datadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/MorningBL/data/'
-    massdatadir = 'C:/Users/Elliott/Documents/PhD Reading/PhD Research/Aerosol Backscatter/clearFO/data/ERG/'
+    maindir = '/home/nerc/Documents/MieScatt/'
+    datadir = '/home/nerc/Documents/MieScatt/data/'
+
 
 
     savedir = maindir + 'figures/LidarRatio/'
 
     # data
-    wxtdatadir = datadir + 'L1/'
+    wxtdatadir = datadir
+    massdatadir = datadir
 
     # RH data
     wxt_inst_site = 'WXT_KSSW'
@@ -482,6 +480,10 @@ def main():
         # V_dry[aer_i] = (4.0/3.0) * np.pi * (r_d_m ** 3.0)
         V_dry_from_mass[aer_i] = mass_kg_kg[aer_i] / aer_density[aer_i]  # [m3]
 
+        # if np.nan (i.e. there was no mass therefore no volume) make it 0.0
+        bin = np.isnan(V_dry_from_mass[aer_i])
+        V_dry_from_mass[aer_i][bin] = 0.0
+
     # ---------------------------------------------------------
     # Swell the particles (r_md,aer_i) [microns]
 
@@ -535,15 +537,24 @@ def main():
         V_water_i[aer_i] = V_wet_from_mass[aer_i] - V_dry_from_mass[aer_i]
 
     # calculate total water volume
-    V_water_2d = np.array(V_water_i.values()) # turn into a 2D array
+    V_water_2d = np.array(V_water_i.values()) # turn into a 2D array (does not matter column order)
     V_water_tot = np.nansum(V_water_2d, axis=0)
 
     # combine volumes of the DRY aerosol and the water into a single 2d array shape=(time, substance)
-    V_abs = np.transpose(np.vstack([np.array(V_dry_from_mass.values()),V_water_tot]))
+    # V_abs = np.transpose(np.vstack([np.array(V_dry_from_mass.values()),V_water_tot]))
+    # shape = (time, species)
+    V_abs = np.transpose(np.vstack([np.array([V_dry_from_mass[i] for i in aer_particles]),V_water_tot]))
 
-    # now calculate the relative volume of each of these
+    # now calculate the relative volume of each of these (V_rel)
     # scale absolute volume to find relative volume of each (such that sum(all substances for time t = 1))
-    scaler = 1.0/(np.nansum(V_abs, axis=1)) # a value for each time step
+    vol_sum = np.nansum(V_abs, axis=1)
+    vol_sum[vol_sum == 0.0] = np.nan
+    scaler = 1.0/(vol_sum) # a value for each time step
+
+    # if there is no mass data and therefore no volume data, for an species for time t, then set it to np.nan
+    bin = np.isinf(scaler)
+    scaler[bin] = np.nan
+
     scaler_rep = np.transpose(np.array([scaler]*6)) # 2d array shape=(time, substance)
     V_rel = scaler_rep * V_abs
 
