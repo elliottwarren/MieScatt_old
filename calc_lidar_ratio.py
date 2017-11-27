@@ -12,8 +12,30 @@ import numpy as np
 import datetime as dt
 
 import ellUtils as eu
+from mie_sens_mult_aerosol import linear_interpolate_n
+from pymiecoated import Mie
 
 # Read
+
+def read_n_data(aer_particles, aer_names, ceil_lambda, getH2O=True):
+
+
+    n_species = {}
+    # Read in complex index of refraction data
+    for aer_i in aer_particles:
+
+        # get the name of the aerosol as is appears in the function
+        aer_i_name = aer_names[aer_i]
+
+        # get the complex index of refraction for the n (linearly interpolated from a lookup table)
+        n_species[aer_i], _ = linear_interpolate_n(aer_i_name, ceil_lambda)
+
+    # get water too?
+    if getH2O == True:
+        n_species['H2O'], _ = linear_interpolate_n('water', ceil_lambda)
+
+    return n_species
+
 def read_mass_data(massdatadir, year):
 
     """
@@ -47,8 +69,11 @@ def read_mass_data(massdatadir, year):
     # QAQC - turn all negative values in each column into nans if one of them is negative
     for header_i in headers:
         idx = np.where(mass[header_i] < 0.0)
-        for header_j in headers:
-            mass[header_j][idx] = np.nan
+        mass[header_i][idx] = np.nan
+
+        # # turn all values in the row negative
+        # for header_j in headers:
+        #     mass[header_j][idx] = np.nan
 
     return mass
 
@@ -294,7 +319,7 @@ def calc_r_md_species(r_d_microns, WXT, aer_i):
     # bool = np.logical_and(WXT['RH_frac'] >= rh_del, WXT['RH_frac'] <= rh_cap)
     # rh_bet_del_cap = np.where(bool == True)[0]
 
-    beta = np.exp((0.00077 * WXT['RH'])/(1.009 - WXT['RH']))
+    beta = np.exp((0.00077 * WXT['RH_frac'])/(1.009 - WXT['RH_frac']))
     rh_lt_97 = WXT['RH_frac'] < 0.97
     phi[rh_lt_97] = 1.058
     phi[~rh_lt_97] = 1.058 - ((0.0155 * (WXT['RH_frac'][~rh_lt_97] - 0.97))
@@ -374,6 +399,7 @@ def main():
     # data
     wxtdatadir = datadir
     massdatadir = datadir
+    ffoc_gfdir = datadir
 
     # RH data
     wxt_inst_site = 'WXT_KSSW'
@@ -384,6 +410,11 @@ def main():
     # aerosol particles to calculate (OC = Organic carbon, CBLK = black carbon, both already measured)
     # match dictionary keys further down
     aer_particles = ['(NH4)2SO4', 'NH4NO3', 'NaCl', 'CORG', 'CBLK']
+
+    all_species = ['(NH4)2SO4', 'NH4NO3', 'NaCl', 'CORG', 'CBLK', 'H2O']
+    # aer names in the complex index of refraction files
+    aer_names = {'(NH4)2SO4': 'Ammonium sulphate', 'NH4NO3': 'Ammonium nitrate',
+                'CORG': 'Organic carbon', 'NaCl': 'Generic NaCl', 'CBLK':'Soot', 'MURK': 'MURK'}
 
     # density of molecules [kg m-3]
     # CBLK: # Zhang et al., (2016) Measuring the morphology and density of internally mixed black carbon
@@ -396,12 +427,29 @@ def main():
                    'CORG': 1100.0,
                    'CBLK': 1200.0}
 
+    # Organic carbon growth curve (Assumed to be the same as aged fossil fuel organic carbon
+
+
     # pure water density
     water_density = 1000.0 # kg m-3
+
+    # wavelength to aim for
+    ceil_lambda = [0.905e-06]
 
     # ==============================================================================
     # Read data
     # ==============================================================================
+
+    # read in the complex index of refraction data for the aerosol species (can include water)
+    n_species = read_n_data(aer_particles, aer_names, ceil_lambda, getH2O=True)
+
+    # Read in physical growth factors (GF) for organic carbon (assumed to be the same as aged fossil fuel OC)
+    gf_ffoc_raw = eu.csv_read(ffoc_gfdir + 'GF_fossilFuelOC_calcS.csv')
+    gf_ffoc_raw = np.array(gf_ffoc_raw)[1:, :] # skip header
+
+    gf_ffoc = {'RH_frac': np.array(gf_ffoc_raw[:,0], dtype=float),
+                'GF': np.array(gf_ffoc_raw[:,1], dtype=float)}
+
 
     # Read in species by mass data
     # Units are grams m-3
@@ -500,7 +548,12 @@ def main():
     r_md['CBLK'][:] = r_d_microns
 
     # calculate r_md for organic carbon using the MO empirically fitted g(RH) curves
-    # r_md['CORG'] = ...
+    r_md['CORG'] = np.empty(len(date_range))
+    r_md['CORG'][:] = np.nan
+    for t, time_t in enumerate(date_range):
+
+        _, idx, _ = eu.nearest(gf_ffoc['RH_frac'], WXT['RH_frac'][t])
+        r_md['CORG'][t] = r_d_microns * gf_ffoc['GF'][idx]
 
 
     # -----------------------------------------------------------
@@ -512,29 +565,30 @@ def main():
     #   and water volume (V_wet - Vdry)
 
     GF = {}
-    aer_wet_density = {}
+    # aer_wet_density = {}
     V_wet_from_mass = {}
     V_water_i  = {}
-    for aer_i in ['(NH4)2SO4', 'NH4NO3', 'NaCl', 'CBLK']: # aer_particles:
+    for aer_i in aer_particles: # aer_particles:
 
         # physical growth factor
         GF[aer_i] = r_md[aer_i] / r_d_microns
 
-        # wet aerosol density
-        aer_wet_density[aer_i] = (aer_density[aer_i] / (GF[aer_i]**3.0)) + \
-                                 (water_density * (1.0 - (1.0 / (GF[aer_i]**3.0))))
+        # # wet aerosol density
+        # aer_wet_density[aer_i] = (aer_density[aer_i] / (GF[aer_i]**3.0)) + \
+        #                          (water_density * (1.0 - (1.0 / (GF[aer_i]**3.0))))
 
 
         # wet volume, using the growth rate from r_d to r_md
-        V_wet_from_mass[aer_i] = V_dry_from_mass[aer_i] * (GF[aer_i] ** 3.0)
-
-
         # if np.nan (i.e. there was no mass therefore no volume) make it 0.0
+        V_wet_from_mass[aer_i] = V_dry_from_mass[aer_i] * (GF[aer_i] ** 3.0)
         bin = np.isnan(V_wet_from_mass[aer_i])
         V_wet_from_mass[aer_i][bin] = 0.0
 
         # water volume contribution from just this aer_i
         V_water_i[aer_i] = V_wet_from_mass[aer_i] - V_dry_from_mass[aer_i]
+
+    # ---------------------------
+    # Calculate relative volume of all aerosol AND WATER (to help calculate n_mixed)
 
     # calculate total water volume
     V_water_2d = np.array(V_water_i.values()) # turn into a 2D array (does not matter column order)
@@ -545,36 +599,97 @@ def main():
     # shape = (time, species)
     V_abs = np.transpose(np.vstack([np.array([V_dry_from_mass[i] for i in aer_particles]),V_water_tot]))
 
+
     # now calculate the relative volume of each of these (V_rel)
     # scale absolute volume to find relative volume of each (such that sum(all substances for time t = 1))
     vol_sum = np.nansum(V_abs, axis=1)
     vol_sum[vol_sum == 0.0] = np.nan
     scaler = 1.0/(vol_sum) # a value for each time step
 
-    # if there is no mass data and therefore no volume data, for an species for time t, then set it to np.nan
+    # if there is no mass data for time t, and therefore no volume data, then set scaler to np.nan
     bin = np.isinf(scaler)
     scaler[bin] = np.nan
 
-    scaler_rep = np.transpose(np.array([scaler]*6)) # 2d array shape=(time, substance)
-    V_rel = scaler_rep * V_abs
+    # ToDo something is screwy here... V_rel does not add up to one for time t
+    # ToDo with the nan bit of nansum?
+    # Relative volumes
+    V_rel = {'H2O': scaler * V_water_tot}
+    for aer_i in aer_particles:
+        V_rel[aer_i] = scaler * V_dry_from_mass[aer_i]
+
+    # testing the screwiness!
+    test = []
+    for aer_i in aer_particles:
+        print aer_i
+        test += [V_rel[aer_i][0]]
+
+    print np.sum(test)
+
+    # --------------------------------------------------------------
+    # Calculate relative volume of the swollen aerosol (to weight and calculate r_md)
+
+    # V_wet_from_mass
+    V_abs_aer_only = np.transpose(np.array([V_wet_from_mass[i] for i in aer_particles]))
+
+
+    # now calculate the relative volume of each of these (V_rel_Aer_only)
+    # scale absolute volume to find relative volume of each (such that sum(all substances for time t = 1))
+    vol_sum_aer_only = np.nansum(V_abs_aer_only, axis=1)
+    vol_sum_aer_only[vol_sum_aer_only == 0.0] = np.nan
+    scaler = 1.0/(vol_sum_aer_only) # a value for each time step
+
+    # if there is no mass data for time t, and therefore no volume data, then set scaler to np.nan
+    bin = np.isinf(scaler)
+    scaler[bin] = np.nan
+
+    # Relative volumes
+    V_rel_aer_only = {}
+    for aer_i in aer_particles:
+        V_rel_aer_only[aer_i] = scaler * V_wet_from_mass[aer_i]
+
 
     # --------------------------------------------------------------
 
     # calculate n_mixed using volume mixing method
+    # volume mixing for CIR (eq. 12, Liu and Daum 2008)
 
-
-
-
-    # calculate relative volume of all wet aerosol (V_rel,wet,aer_i)
-
-
-    # calculate n_mixed using volume mixing and (V_rel,wet,aer_i)
+    n_mixed = np.array([V_rel[i] * n_species[i] for i in V_rel.iterkeys()])
+    n_mixed = np.sum(n_mixed, axis=0)
 
 
     # calculate volume mean radii from r_md,aer_i (weighted by V_rel,wet,aer_i)
+    r_md_avg = np.array([V_rel_aer_only[aer_i] * r_md[aer_i] for i in aer_particles])
+    r_md_avg = np.nansum(r_md_avg, axis=0)
 
+    # convert from microns to m
+    r_md_avg_m = r_md_avg * 1e-6
+
+    # calculate the size parameter for the average aerosol size
+    x_wet_mixed = (2.0 * np.pi * r_md_avg_m)/ceil_lambda
 
     # calculate Q_back and Q_ext from the avergae r_md and n_mixed
+    S = np.empty(len(date_range))
+    S[:] = np.nan
+    for t, time_t in enumerate(date_range):
+
+        x_i = x_wet_mixed[t]  # size parameter_i
+        n_i = n_mixed[t]  # complex index of refraction i
+
+        if t in np.arange(0,35000,500):
+            print t
+
+
+        if np.logical_or(~np.isnan(x_i), ~np.isnan(n_i)):
+
+            particle = Mie(x=x_i, m=n_i)
+            Q_ext = particle.qext()
+            Q_back = particle.qb()
+
+            # calculate the lidar ratio
+            S = Q_ext / Q_back
+
+
+
 
 
     # calculate lidar ratio
