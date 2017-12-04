@@ -280,7 +280,7 @@ def convert_mass_to_kg_kg(mass, WXT, aer_particles):
 def calc_r_md_species(r_d_microns, WXT, aer_i):
 
     """
-    Calculate the r_md for all particles, given the RH and what species
+    Calculate the r_md [microns] for all particles, given the RH [fraction] and what species
 
     :param r_d_microns:
     :param WXT: (needed for RH)
@@ -672,6 +672,10 @@ def main():
         _, idx, _ = eu.nearest(gf_ffoc['RH_frac'], WXT['RH_frac'][t])
         r_md['CORG'][t, :] = r_d_microns * gf_ffoc['GF'][idx]
 
+    # convert r_md units from microns to meters
+    r_md_m = {}
+    for aer_i in aer_particles:
+        r_md_m[aer_i] = r_md[aer_i] * 1e-06
 
     # -----------------------------------------------------------
 
@@ -762,21 +766,19 @@ def main():
 
     # --------------------------------------------------------------
 
+    # calculate n_wet for each rbin (complex refractive index of dry aerosol and water based on physical growth)
+    #   follows CLASSIC scheme
+    n_wet = {}
 
 
+    for aer_i in aer_particles: # aer_particles:
 
-
-
-
-
-
-
-
-
-
+        # physical growth factor
+        n_wet[aer_i] = (n_species[aer_i] / (GF[aer_i] ** 3.0)) + (n_species['H2O'] * (1 - (1/(GF[aer_i] ** 3.0))))
 
 
     # --------------------------------------------------------------
+
 
     # # calculate n_mixed using volume mixing method
     # # volume mixing for CIR (eq. 12, Liu and Daum 2008)
@@ -798,27 +800,139 @@ def main():
 
     # --------------------------
 
-    # calculate Q_back and Q_ext from the avergae r_md and n_mixed
-    S = np.empty(len(date_range))
-    S[:] = np.nan
-    for t, time_t in enumerate(date_range):
+    # Calculate Q_dry for each bin and species.
+    #   The whole averaging thing up to cross sections comes later (Geisinger et al., 2016)
 
-        x_i = x_wet_mixed[t]  # size parameter_i
-        n_i = n_mixed[t]  # complex index of refraction i
+    # Create size parameters
+    X = {}
+    for aer_i in aer_particles:
+        X[aer_i] = (2.0 * np.pi * r_md_m[aer_i])/ceil_lambda[0]
 
-        if t in np.arange(0, 35000, 500):
-            print t
+    # create Q_ext and Q_back arrays ready
+    Q_ext = {}
+    Q_back = {}
+
+    print ''
+    print 'Calculating extinction and backscatter efficiencies...'
+
+    # 1) for aer_i in aerosols
+    for aer_i in aer_particles:
+
+        # status tracking
+        print '  ' + aer_i
+
+        Q_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
+        Q_ext[aer_i][:] = np.nan
+
+        Q_back[aer_i] = np.empty(r_md_m[aer_i].shape)
+        Q_back[aer_i][:] = np.nan
+
+        # 2) for time, t
+        for t, time_t in enumerate(date_range):
+
+            # status tracking
+            if t in np.arange(0, 35000, 1000):
+                print '     ' + str(t)
+
+            # 3) for radii bin, i
+            for i, r_md_t_i in enumerate(r_md_m[aer_i][t, :]):
+
+                X_t_i = X[aer_i][t, i]  # size parameter_t (for all sizes at time t)
+                n_wet_t_i = n_wet[aer_i][t, i]  # complex index of refraction t (for all sizes at time t)
 
 
-        if np.logical_and(~np.isnan(x_i), ~np.isnan(n_i)):
+                if np.logical_and(~np.isnan(X_t_i), ~np.isnan(n_wet_t_i)):
 
-            particle = Mie(x=x_i, m=n_i)
-            Q_ext = particle.qext()
-            Q_back = particle.qb()
+                    # Q_back / 4.0pi as normal .qb() is a hemispherical backscatter, and we want specifically 180 deg.
+                    particle = Mie(x=X_t_i, m=n_wet_t_i)
+                    Q_ext[aer_i][t, i] = particle.qext()
+                    Q_back[aer_i][t, i] = particle.qb() / (4.0 * np.pi)
 
-            # calculate the lidar ratio
-            S_t = Q_ext / Q_back
-            S[t] = Q_ext / Q_back
+
+    # ------------------------------------------------
+
+    # Use Geisinger et al., (2016) (section 2.2.4) approach to calculate cross section
+    #   because the the ext and backscatter components are really sensitive to variation in r (and as rbins are defined
+    #   somewhat arbitrarily...
+
+    # total number of subsamples for each bin (self defined)
+    n_samples = 10.0
+
+    # all upper and lower bins
+    R_db = (dN['D'] + (0.5 * dN['dD'])) / 2.0 # upper
+    R_da = (dN['D'] - (0.5 * dN['dD'])) / 2.0 # lower
+
+
+    for aer_i in aer_particles:
+
+
+        for t, time_t in enumerate(date_range):
+
+            # for each bin range
+            for r, R_db_i, R_da_i in zip(np.arange(len(R_db)), R_db, R_da):
+
+                # set up the extinction and backscatter cross sections for this bin range
+                C_ext_sample = np.empty(int(n_samples))
+                C_back_sample = np.empty(int(n_samples))
+
+                # iterate over each subsample (g) to get R_dg for the bin, and calc the cross section
+                # g_idx will place it it the right spot in C_back
+                for g_idx, g in enumerate(np.arange(1,n_samples+1)):
+
+                    # calculate R_dg (subsample r)
+                    #   Eqn 18
+                    R_dg = (g * ((R_db_i - R_da_i)/n_samples)) + R_da_i
+
+                    # calc Q_ext(R_dg, n_wet,R_dg)
+                    # calc_Q_back(R_dg, n_wet,R_dg)
+                    # would need to swell wider range of particles (93 bins * subsamples)
+
+                    # calculate the extinction and backscatter cross section for the subsample
+                    #   part of Eqn 16 and 17
+                    C_ext_sample[g_idx] = Q_ext[t, r] * np.pi * (R_dg ** 2.0)
+                    C_back_sample[g_idx] = Q_back[t, r] * np.pi * (R_dg ** 2.0)
+
+
+                # once C_back/ext for all subsamples g, have been calculated, Take the average
+                #   Eqn 17
+                C_ext = (1.0 / n_samples) * np.nansum(C_ext)
+                C_back = (1.0 / n_samples) * np.nansum(C_back)
+
+
+
+
+
+
+
+
+
+
+
+    # --------------------------
+
+
+    # old monodisperse approach
+    # # calculate Q_back and Q_ext from the avergae r_md and n_mixed
+    # S = np.empty(len(date_range))
+    # S[:] = np.nan
+    # for t, time_t in enumerate(date_range):
+    #
+    #     x_i = x_wet_mixed[t]  # size parameter_i
+    #     n_i = n_mixed[t]  # complex index of refraction i
+    #
+    #     if t in np.arange(0, 35000, 500):
+    #         print t
+    #
+    #
+    #     if np.logical_and(~np.isnan(x_i), ~np.isnan(n_i)):
+    #
+    #         particle = Mie(x=x_i, m=n_i)
+    #         Q_ext = particle.qext()
+    #         Q_back = particle.qb()
+    #
+    #         # calculate the lidar ratio
+    #         S_t = Q_ext / Q_back
+    #         S[t] = Q_ext / Q_back
 
     # ---------------------
 
