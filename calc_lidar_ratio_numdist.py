@@ -863,10 +863,9 @@ def main():
     R_da = (dN['D'] - (0.5 * dN['dD'])) / 2.0 # lower
 
 
-    for aer_i in aer_particles:
+    for t, time_t in enumerate(date_range):
 
-
-        for t, time_t in enumerate(date_range):
+        for aer_i in aer_particles:
 
             # for each bin range
             for r, R_db_i, R_da_i in zip(np.arange(len(R_db)), R_db, R_da):
@@ -898,7 +897,15 @@ def main():
                 C_ext = (1.0 / n_samples) * np.nansum(C_ext)
                 C_back = (1.0 / n_samples) * np.nansum(C_back)
 
+            # calculate C_ext for species
+            # sigma_ext_aer_i = sum(C_ext * N) over all bins
+            # sigma_back_aer_i = sum(C_back * N) over all bins
 
+        # sigma_ext_tot[t] = sum(all sigma_ext_aer_i)
+        # sigma_back_tot[t] = sum(all sigma_back_aer_i)
+        # S[t] = sigma_ext_tot[t] / sigma_back_tot[t]
+
+    # plt.plot(S)
 
 
 
