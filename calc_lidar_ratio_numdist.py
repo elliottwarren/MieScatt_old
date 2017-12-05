@@ -493,7 +493,7 @@ def main():
     ceil_lambda = [0.905e-06]
 
     # CLASSIC radii [m]
-    classic_r_d = {'(NH4)2SO4': 9.5e-02,
+    r_d_classic = {'(NH4)2SO4': 9.5e-02,
                   'NH4NO3': 9.5e-02,
                   'NaCl': 1.0e-01,
                   'CORG': 1.2e-01,
@@ -620,18 +620,21 @@ def main():
     # Also creates the air density and is stored in WXT
     mass_kg_kg, WXT = convert_mass_to_kg_kg(mass, WXT, aer_particles)
 
-    # # start with just 0.11 microns as the radius - can make it more fancy later...
-    # r_d_microns = 0.11  # [microns]
-    # r_d_m = r_d_microns * 1.0e-6  # [m]
 
-    # # calculate the number of particles for each species using radius_m and the mass
-    # # Hopefull not needed!
-    # num_part = {}
-    # for aer_i in aer_particles:
-    #     num_part[aer_i] = mass_kg_kg[aer_i] / ((4.0/3.0) * np.pi * (aer_density[aer_i]/WXT['dryair_rho']) * (r_d_m ** 3.0))
 
 
     # work out Number concentration (relative weight) for each species
+    # calculate the number of particles for each species using radius_m and the mass
+    # Hopefull not needed!
+    num_part = {}
+    for aer_i in aer_particles:
+        num_part[aer_i] = mass_kg_kg[aer_i] / ((4.0/3.0) * np.pi * (aer_density[aer_i]/WXT['dryair_rho']) * (r_d_classic[aer_i] ** 3.0))
+
+    # find relative N from N(mass, r_md)
+    N_weight = {}
+    for aer_i in aer_particles:
+        N_weight[aer_i] = num_part[aer_i] / np.nansum(np.array(num_part.values()), axis=0)
+
 
 
 
@@ -849,61 +852,64 @@ def main():
                     Q_back[aer_i][t, i] = particle.qb() / (4.0 * np.pi)
 
 
+
+
     # ------------------------------------------------
 
-    # Use Geisinger et al., (2016) (section 2.2.4) approach to calculate cross section
-    #   because the the ext and backscatter components are really sensitive to variation in r (and as rbins are defined
-    #   somewhat arbitrarily...
-
-    # total number of subsamples for each bin (self defined)
-    n_samples = 10.0
-
-    # all upper and lower bins
-    R_db = (dN['D'] + (0.5 * dN['dD'])) / 2.0 # upper
-    R_da = (dN['D'] - (0.5 * dN['dD'])) / 2.0 # lower
-
-
-    for t, time_t in enumerate(date_range):
-
-        for aer_i in aer_particles:
-
-            # for each bin range
-            for r, R_db_i, R_da_i in zip(np.arange(len(R_db)), R_db, R_da):
-
-                # set up the extinction and backscatter cross sections for this bin range
-                C_ext_sample = np.empty(int(n_samples))
-                C_back_sample = np.empty(int(n_samples))
-
-                # iterate over each subsample (g) to get R_dg for the bin, and calc the cross section
-                # g_idx will place it it the right spot in C_back
-                for g_idx, g in enumerate(np.arange(1,n_samples+1)):
-
-                    # calculate R_dg (subsample r)
-                    #   Eqn 18
-                    R_dg = (g * ((R_db_i - R_da_i)/n_samples)) + R_da_i
-
-                    # calc Q_ext(R_dg, n_wet,R_dg)
-                    # calc_Q_back(R_dg, n_wet,R_dg)
-                    # would need to swell wider range of particles (93 bins * subsamples)
-
-                    # calculate the extinction and backscatter cross section for the subsample
-                    #   part of Eqn 16 and 17
-                    C_ext_sample[g_idx] = Q_ext[t, r] * np.pi * (R_dg ** 2.0)
-                    C_back_sample[g_idx] = Q_back[t, r] * np.pi * (R_dg ** 2.0)
-
-
-                # once C_back/ext for all subsamples g, have been calculated, Take the average
-                #   Eqn 17
-                C_ext = (1.0 / n_samples) * np.nansum(C_ext)
-                C_back = (1.0 / n_samples) * np.nansum(C_back)
-
-            # calculate C_ext for species
-            # sigma_ext_aer_i = sum(C_ext * N) over all bins
-            # sigma_back_aer_i = sum(C_back * N) over all bins
-
-        # sigma_ext_tot[t] = sum(all sigma_ext_aer_i)
-        # sigma_back_tot[t] = sum(all sigma_back_aer_i)
-        # S[t] = sigma_ext_tot[t] / sigma_back_tot[t]
+    # probably overkill...
+    # # Use Geisinger et al., (2016) (section 2.2.4) approach to calculate cross section
+    # #   because the the ext and backscatter components are really sensitive to variation in r (and as rbins are defined
+    # #   somewhat arbitrarily...
+    #
+    # # total number of subsamples for each bin (self defined)
+    # n_samples = 10.0
+    #
+    # # all upper and lower bins
+    # R_db = (dN['D'] + (0.5 * dN['dD'])) / 2.0 # upper
+    # R_da = (dN['D'] - (0.5 * dN['dD'])) / 2.0 # lower
+    #
+    #
+    # for t, time_t in enumerate(date_range):
+    #
+    #     for aer_i in aer_particles:
+    #
+    #         # for each bin range
+    #         for r, R_db_i, R_da_i in zip(np.arange(len(R_db)), R_db, R_da):
+    #
+    #             # set up the extinction and backscatter cross sections for this bin range
+    #             C_ext_sample = np.empty(int(n_samples))
+    #             C_back_sample = np.empty(int(n_samples))
+    #
+    #             # iterate over each subsample (g) to get R_dg for the bin, and calc the cross section
+    #             # g_idx will place it it the right spot in C_back
+    #             for g_idx, g in enumerate(np.arange(1,n_samples+1)):
+    #
+    #                 # calculate R_dg (subsample r)
+    #                 #   Eqn 18
+    #                 R_dg = (g * ((R_db_i - R_da_i)/n_samples)) + R_da_i
+    #
+    #                 # calc Q_ext(R_dg, n_wet,R_dg)
+    #                 # calc_Q_back(R_dg, n_wet,R_dg)
+    #                 # would need to swell wider range of particles (93 bins * subsamples)
+    #
+    #                 # calculate the extinction and backscatter cross section for the subsample
+    #                 #   part of Eqn 16 and 17
+    #                 C_ext_sample[g_idx] = Q_ext[t, r] * np.pi * (R_dg ** 2.0)
+    #                 C_back_sample[g_idx] = Q_back[t, r] * np.pi * (R_dg ** 2.0)
+    #
+    #
+    #             # once C_back/ext for all subsamples g, have been calculated, Take the average
+    #             #   Eqn 17
+    #             C_ext = (1.0 / n_samples) * np.nansum(C_ext)
+    #             C_back = (1.0 / n_samples) * np.nansum(C_back)
+    #
+    #         # calculate C_ext for species
+    #         # sigma_ext_aer_i = sum(C_ext * N) over all bins
+    #         # sigma_back_aer_i = sum(C_back * N) over all bins
+    #
+    #     # sigma_ext_tot[t] = sum(all sigma_ext_aer_i)
+    #     # sigma_back_tot[t] = sum(all sigma_back_aer_i)
+    #     # S[t] = sigma_ext_tot[t] / sigma_back_tot[t]
 
     # plt.plot(S)
 
