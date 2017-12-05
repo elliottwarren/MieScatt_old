@@ -279,21 +279,21 @@ def WXT_hourly_average(WXT_in):
     # set up hourly array
     WXT_hourly = {'time': date_range}
     for var in WXT_in.iterkeys():
-        if (var != 'rawtime') & (var != 'time'):
+        if ((var == 'rawtime') | (var == 'time')) == False:
 
             WXT_hourly[var] = np.empty(len(date_range))
             WXT_hourly[var][:] = np.nan
 
     # take hourly averages of the 15 min data
+    for t, time_t in enumerate(date_range):
 
-    if (var != 'rawtime') & (var != 'time'):
-        for t, time_t in enumerate(date_range):
+        # find data within the hour
+        bool = np.logical_and(WXT_in['time'] > time_t, WXT_in['time'] < (time_t + dt.timedelta(hours=1)))
 
-            # find data within the hour
-            bool = np.logical_and(WXT_in['time'] > time_t, WXT_in['time'] < (time_t + dt.timedelta(hours=1)))
+        for var in WXT_in.iterkeys():
+            if ((var == 'rawtime') | (var == 'time')) == False:
 
-            # take mean of the data
-            for var in WXT_in.iterkeys():
+                # take mean of the data
                 WXT_hourly[var][t] = np.nanmean(WXT_in[var][bool])
 
 
@@ -1056,8 +1056,8 @@ def main():
                     Q_back[aer_i][t, r] = particle.qb() / (4.0 * np.pi)
 
                     # calculate extinction cross section
-                    C_ext[aer_i][t, r] = Q_ext * np.pi * (r_md_t_r ** 2.0)
-                    C_back[aer_i][t, r] = Q_back * np.pi * (r_md_t_r ** 2.0)
+                    C_ext[aer_i][t, r] = Q_ext[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
+                    C_back[aer_i][t, r] = Q_back[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
 
             sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
             sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
