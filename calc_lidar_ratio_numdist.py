@@ -37,7 +37,7 @@ def read_n_data(aer_particles, aer_names, ceil_lambda, getH2O=True):
 
     return n_species
 
-def read_mass_data(massdatadir, year):
+def read_PM1_mass_data(massdatadir, year):
 
     """
     Read in the mass data from NK
@@ -75,6 +75,87 @@ def read_mass_data(massdatadir, year):
         # # turn all values in the row negative
         # for header_j in headers:
         #     mass[header_j][idx] = np.nan
+
+    return mass
+
+def read_EC_OC_mass_data(massdatadir, year):
+
+    """
+    Read in the elemental carbon (EC) and organic carbon (OC) mass data from NK
+    Raw data is micrograms m-3 but converted to and outputed as grams m-3
+    :param year:
+    :return: mass
+
+    EC and BC (soot) are treated the same in CLASSIC, therefore EC will be taken as BC here.
+    """
+
+    # make sure year is string
+    year = str(year)
+
+    massfname = 'OC_EC_Daily_North_Kensington_DEFRA_'+year+'.csv'
+    massfilepath = massdatadir + massfname
+    massrawData = np.genfromtxt(massfilepath, delimiter=',', skip_header=4, dtype="|S20") # includes the header
+
+    mass = {'time': np.array([dt.datetime.strptime(i[0], '%d/%m/%Y') for i in massrawData[1:]]),
+            'EC': np.array([np.nan if i[2] == 'No data' else i[2] for i in massrawData[1:]], dtype=float),
+            'OC': np.array([np.nan if i[4] == 'No data' else i[4] for i in massrawData[1:]], dtype=float)}
+
+    # times were valid from 12:00 so add the extra 12 hours on
+    # but they were also hour ending, and as all other data is hour beginning, then take 1 off (so +11 in total)
+    mass['time'] += dt.timedelta(hours=11)
+
+    # convert units from micrograms to grams
+    mass['EC'] *= 1e-06
+    mass['OC'] *= 1e-06
+
+    # QAQC - turn all negative values in each column into nans if one of them is negative
+    for aer_i in ['EC', 'OC']:
+        idx = np.where(mass[aer_i] < 0.0)
+        mass[aer_i][idx] = np.nan
+
+
+    return mass
+
+def read_PM10_mass_data(massdatadir, year):
+
+    """
+    Read in the other PM10 mass data from NK
+    Raw data is micrograms m-3 but converted to and outputed as grams m-3
+    :param year:
+    :return: mass
+
+    """
+
+    # make sure year is string
+    year = str(year)
+
+    massfname = 'PM10species_Hr_North_Kensington_DEFRA_'+year+'.csv'
+    massfilepath = massdatadir + massfname
+    massrawData = np.genfromtxt(massfilepath, delimiter=',', skip_header=4, dtype="|S20") # includes the header
+
+    # sort out the raw time. Data only has the DD/MM/YYYY aspect... and is somehow in GMT too...
+    raw_time = np.array([dt.datetime.strptime(i[0], '%d/%m/%Y') for i in massrawData[1:]])
+    # as data is internally complete (no time gaps) can create a datelist with the hours
+    time_endHr = np.array(eu.date_range(raw_time[0], raw_time[-1] + dt.timedelta(days=1), 60, 'minutes'))
+    time_strtHr = time_endHr - dt.timedelta(hours=1)
+
+    mass = {'time': time_strtHr,
+            'CL': np.array([np.nan if i[1] == 'No data' else i[1] for i in massrawData[1:]], dtype=float),
+            'Na': np.array([np.nan if i[3] == 'No data' else i[3] for i in massrawData[1:]], dtype=float),
+            'NH4': np.array([np.nan if i[5] == 'No data' else i[5] for i in massrawData[1:]], dtype=float),
+            'NO3': np.array([np.nan if i[7] == 'No data' else i[7] for i in massrawData[1:]], dtype=float),
+            'SO4': np.array([np.nan if i[9] == 'No data' else i[9] for i in massrawData[1:]], dtype=float)}
+
+    # convert units from micrograms to grams
+    # QAQC - turn all negative values in each column into nans if one of them is negative
+    for key in mass.iterkeys():
+        if key != 'time':
+            mass[key] *= 1e-06
+
+            # QAQC (values < 0 are np.nan)
+            idx = np.where(mass[key] < 0.0)
+            mass[key][idx] = np.nan
+
 
     return mass
 
@@ -141,8 +222,82 @@ def normpdf(x, mean, sd):
     return num / denom
 
 
-
 # Process
+
+def OC_EC_interp_hourly(OC_EC_in):
+
+    """
+    Increase EC and OC data resolution from daily to hourly with a simple linear interpolation
+
+    :param OC_EC_in:
+    :return:OC_EC_hourly
+    """
+
+    # Increase to hourly resolution by linearly interpolate between the measurement times
+    date_range = eu.date_range(OC_EC_in['time'][0], OC_EC_in['time'][-1] + dt.timedelta(days=1), 60, 'minutes')
+    OC_EC_hourly = {'time': date_range,
+                    'OC': np.empty(len(date_range)),
+                    'EC': np.empty(len(date_range))}
+
+    OC_EC_hourly['OC'][:] = np.nan
+    OC_EC_hourly['EC'][:] = np.nan
+
+    # fill hourly data
+    for aer_i in ['OC', 'EC']:
+
+        # for each day, spready data out into the hourly slots
+        # do not include the last time, as it cannot be used as a start time (fullday)
+        for t, fullday in enumerate(OC_EC_in['time'][:-1]):
+
+            # start = fullday
+            # end = fullday + dt.timedelta(days=1)
+
+            # linearly interpolate between the two main dates
+            interp = np.linspace(OC_EC_in[aer_i][t], OC_EC_in[aer_i][t+1],24)
+
+            # idx range as the datetimes are internally complete, therefore a number sequence can be used without np.where()
+            idx = np.arange(((t+1)*24)-24, (t+1)*24)
+
+            # put the values in
+            OC_EC_hourly[aer_i][idx] = interp
+
+
+    return OC_EC_hourly
+
+def WXT_hourly_average(WXT_in):
+
+
+    """
+    Average up the WXT data to hourly values
+    :param WXT_in:
+    :return: WXT_hourly
+    """
+
+    # WXT average up to hourly
+    date_range = eu.date_range(WXT_in['time'][0], WXT_in['time'][-1] + dt.timedelta(days=1), 60, 'minutes')
+
+    # set up hourly array
+    WXT_hourly = {'time': date_range}
+    for var in WXT_in.iterkeys():
+        if (var != 'rawtime') & (var != 'time'):
+
+            WXT_hourly[var] = np.empty(len(date_range))
+            WXT_hourly[var][:] = np.nan
+
+    # take hourly averages of the 15 min data
+
+    if (var != 'rawtime') & (var != 'time'):
+        for t, time_t in enumerate(date_range):
+
+            # find data within the hour
+            bool = np.logical_and(WXT_in['time'] > time_t, WXT_in['time'] < (time_t + dt.timedelta(hours=1)))
+
+            # take mean of the data
+            for var in WXT_in.iterkeys():
+                WXT_hourly[var][t] = np.nanmean(WXT_in[var][bool])
+
+
+    return WXT_hourly
 
 def calc_amm_sulph_and_amm_nit_from_gases(moles, mass):
 
@@ -483,7 +638,7 @@ def main():
                    'CORG': 1100.0,
                    'CBLK': 1200.0}
 
-    # Organic carbon growth curve (Assumed to be the same as aged fossil fuel organic carbon
+    # Organic carbon growth curve (Assumed to be the same as aged fossil fuel organic carbon)
 
 
     # pure water density
@@ -516,7 +671,17 @@ def main():
 
     # Read in species by mass data
     # Units are grams m-3
-    mass_in = read_mass_data(massdatadir, year)
+    mass_in = read_PM1_mass_data(massdatadir, year)
+
+    # Read in the daily EC and OC data
+    OC_EC_in = read_EC_OC_mass_data(massdatadir, year)
+
+    # linearly interpolate daily data to hourly
+    OC_EC_hourly = OC_EC_interp_hourly(OC_EC_in)
+
+
+    # Read in the hourly other PM10 data
+    PM10_mass_in = read_PM10_mass_data(massdatadir, year)
 
 
     # Read WXT data
@@ -524,6 +689,20 @@ def main():
     WXT_in = eu.netCDF_read(wxtfilepath, vars=['RH', 'Tair','press', 'time'])
     WXT_in['RH_frac'] = WXT_in['RH'] * 0.01
     WXT_in['time'] -= dt.timedelta(minutes=15) # change time from 'obs end' to 'start of obs', same as the other datasets
+
+    # average WXT data up to hourly
+    WXT_hourly = WXT_hourly_average(WXT_in)
+
+
+    # merge PM10 data
+
+
+
+
+    # time match WXT_hourly to PM10 data
+
+
+
 
     # Trim times
     # as WXT and mass data are 15 mins and both line up exactly already
@@ -579,7 +758,7 @@ def main():
     r_d_microns = dN['D'] * 1e-03 / 2.0
     r_d_m = dN['D'] * 1e-09 / 2.0
 
-    # make a mean distribution of dN
+    # make a median distribution of dN
     dN['med'] = np.nanmedian(dN['binned'], axis=0)
 
     # cut data down to just dry periods
@@ -621,7 +800,9 @@ def main():
     mass_kg_kg, WXT = convert_mass_to_kg_kg(mass, WXT, aer_particles)
 
 
-
+    # temporarily make black carbon mass nan
+    print ' SETTING BLACK CARBON MASS TO NAN'
+    mass_kg_kg['CBLK'][:] = np.nan
 
     # work out Number concentration (relative weight) for each species
     # calculate the number of particles for each species using radius_m and the mass
@@ -632,10 +813,15 @@ def main():
 
     # find relative N from N(mass, r_md)
     N_weight = {}
+    num_conc = {}
     for aer_i in aer_particles:
+
+        # relative weighting of N for each species
         N_weight[aer_i] = num_part[aer_i] / np.nansum(np.array(num_part.values()), axis=0)
 
-
+        # estimated number for the species, from the main distribution data, using the weighting
+        num_conc[aer_i] = np.tile(N_weight[aer_i], (len(dN['med']),1)).transpose() * \
+                          np.tile(dN['med'], (len(N_weight[aer_i]),1))
 
 
     # calculate dry volume
@@ -815,6 +1001,12 @@ def main():
     Q_ext = {}
     Q_back = {}
 
+    C_ext = {}
+    C_back = {}
+
+    sigma_ext = {}
+    sigma_back = {}
+
     print ''
     print 'Calculating extinction and backscatter efficiencies...'
 
@@ -830,6 +1022,18 @@ def main():
         Q_back[aer_i] = np.empty(r_md_m[aer_i].shape)
         Q_back[aer_i][:] = np.nan
 
+        C_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
+        C_ext[aer_i][:] = np.nan
+
+        C_back[aer_i] = np.empty(r_md_m[aer_i].shape)
+        C_back[aer_i][:] = np.nan
+
+        sigma_ext[aer_i] = np.empty(len(date_range))
+        sigma_ext[aer_i][:] = np.nan
+
+        sigma_back[aer_i] = np.empty(len(date_range))
+        sigma_back[aer_i][:] = np.nan
+
         # 2) for time, t
         for t, time_t in enumerate(date_range):
 
@@ -837,21 +1041,30 @@ def main():
             if t in np.arange(0, 35000, 1000):
                 print '     ' + str(t)
 
-            # 3) for radii bin, i
-            for i, r_md_t_i in enumerate(r_md_m[aer_i][t, :]):
+            # 3) for radii bin, r
+            for r, r_md_t_r in enumerate(r_md_m[aer_i][t, :]):
 
-                X_t_i = X[aer_i][t, i]  # size parameter_t (for all sizes at time t)
-                n_wet_t_i = n_wet[aer_i][t, i]  # complex index of refraction t (for all sizes at time t)
+                X_t_r = X[aer_i][t, r]  # size parameter_t (for all sizes at time t)
+                n_wet_t_r = n_wet[aer_i][t, r]  # complex index of refraction t (for all sizes at time t)
 
 
-                if np.logical_and(~np.isnan(X_t_i), ~np.isnan(n_wet_t_i)):
+                if np.logical_and(~np.isnan(X_t_r), ~np.isnan(n_wet_t_r)):
 
                     # Q_back / 4.0pi as normal .qb() is a hemispherical backscatter, and we want specifically 180 deg.
-                    particle = Mie(x=X_t_i, m=n_wet_t_i)
-                    Q_ext[aer_i][t, i] = particle.qext()
-                    Q_back[aer_i][t, i] = particle.qb() / (4.0 * np.pi)
+                    particle = Mie(x=X_t_r, m=n_wet_t_r)
+                    Q_ext[aer_i][t, r] = particle.qext()
+                    Q_back[aer_i][t, r] = particle.qb() / (4.0 * np.pi)
 
+                    # calculate extinction cross section
+                    C_ext[aer_i][t, r] = Q_ext * np.pi * (r_md_t_r ** 2.0)
+                    C_back[aer_i][t, r] = Q_back * np.pi * (r_md_t_r ** 2.0)
 
+            sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
+            sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
+
+    sigma_ext_tot = np.nansum(sigma_ext.values(), axis=1)
+    sigma_back_tot = np.nansum(sigma_back.values(), axis=1)
+    S = sigma_ext_tot / sigma_back_tot
 
 
     # ------------------------------------------------
