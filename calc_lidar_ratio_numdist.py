@@ -882,6 +882,20 @@ def main():
     with open(filename, 'rb') as handle:
         S_loaded = pickle.load(handle)
 
+    # read in clearflo winter number distribution
+    # created on main PC space with calc_plot_N_r_obs.py
+    # !Note: will not work if pickle was saved using protocol=Highest... (for some unknown reason)
+    filename = datadir + 'dN_dmps_aps_clearfloWinter_lt60_cut.pickle'
+    with open(filename, 'rb') as handle:
+        dN = pickle.load(handle)
+
+    # convert D and dD from nm to microns and save as separate variables for clarity further down
+    r_d_microns = dN['D'] * 1e-03 / 2.0
+    r_d_m = dN['D'] * 1e-09 / 2.0
+
+    # make a median distribution of dN
+    dN['med'] = np.nanmedian(dN['binned'], axis=0)
+
     # Read in species by mass data
     if process_type == 'PM1':
 
@@ -937,19 +951,7 @@ def main():
     # pm1 =
 
 
-    # read in clearflo winter number distribution
-    # created on main PC space with calc_plot_N_r_obs.py
-    # !Note: will not work if pickle was saved using protocol=Highest... (for some unknown reason)
-    filename = datadir + 'dN_dmps_aps_clearfloWinter_lt60_cut.pickle'
-    with open(filename, 'rb') as handle:
-        dN = pickle.load(handle)
 
-    # convert D and dD from nm to microns and save as separate variables for clarity further down
-    r_d_microns = dN['D'] * 1e-03 / 2.0
-    r_d_m = dN['D'] * 1e-09 / 2.0
-
-    # make a median distribution of dN
-    dN['med'] = np.nanmedian(dN['binned'], axis=0)
 
 
     # ==============================================================================
