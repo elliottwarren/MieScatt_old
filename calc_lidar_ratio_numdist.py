@@ -11,10 +11,12 @@ import pickle
 
 import numpy as np
 import datetime as dt
+from scipy.stats import spearmanr
 
 import ellUtils as eu
 from mie_sens_mult_aerosol import linear_interpolate_n
 from pymiecoated import Mie
+
 
 # Read
 
@@ -78,7 +80,7 @@ def read_PM1_mass_data(massdatadir, year):
 
     return mass
 
-def read_EC_OC_mass_data(massdatadir, year):
+def read_EC_BC_mass_data(massdatadir, year):
 
     """
     Read in the elemental carbon (EC) and organic carbon (OC) mass data from NK
@@ -97,19 +99,19 @@ def read_EC_OC_mass_data(massdatadir, year):
     massrawData = np.genfromtxt(massfilepath, delimiter=',', skip_header=4, dtype="|S20") # includes the header
 
     mass = {'time': np.array([dt.datetime.strptime(i[0], '%d/%m/%Y') for i in massrawData[1:]]),
-            'EC': np.array([np.nan if i[2] == 'No data' else i[2] for i in massrawData[1:]], dtype=float),
-            'OC': np.array([np.nan if i[4] == 'No data' else i[4] for i in massrawData[1:]], dtype=float)}
+            'CBLK': np.array([np.nan if i[2] == 'No data' else i[2] for i in massrawData[1:]], dtype=float),
+            'CORG': np.array([np.nan if i[4] == 'No data' else i[4] for i in massrawData[1:]], dtype=float)}
 
     # times were valid from 12:00 so add the extra 12 hours on
     # but they were also hour ending, and as all other data is hour beginning, then take 1 off (so +11 in total)
     mass['time'] += dt.timedelta(hours=11)
 
     # convert units from micrograms to grams
-    mass['EC'] *= 1e-06
-    mass['OC'] *= 1e-06
+    mass['CBLK'] *= 1e-06
+    mass['CORG'] *= 1e-06
 
     # QAQC - turn all negative values in each column into nans if one of them is negative
-    for aer_i in ['EC', 'OC']:
+    for aer_i in ['CBLK', 'CORG']:
         idx = np.where(mass[aer_i] < 0.0)
         mass[aer_i][idx] = np.nan
 
@@ -226,45 +228,45 @@ def normpdf(x, mean, sd):
 
 # Process
 
-def OC_EC_interp_hourly(OC_EC_in):
+def OC_BC_interp_hourly(OC_BC_in):
 
     """
     Increase EC and OC data resolution from daily to hourly with a simple linear interpolation
 
-    :param OC_EC_in:
-    :return:OC_EC_hourly
+    :param OC_BC_in:
+    :return:OC_BC_hourly
     """
 
     # Increase to hourly resolution by linearly interpolate between the measurement times
-    date_range = eu.date_range(OC_EC_in['time'][0], OC_EC_in['time'][-1] + dt.timedelta(days=1), 60, 'minutes')
-    OC_EC_hourly = {'time': date_range,
-                    'OC': np.empty(len(date_range)),
-                    'EC': np.empty(len(date_range))}
+    date_range = eu.date_range(OC_BC_in['time'][0], OC_BC_in['time'][-1] + dt.timedelta(days=1), 60, 'minutes')
+    OC_BC_hourly = {'time': date_range,
+                    'CORG': np.empty(len(date_range)),
+                    'CBLK': np.empty(len(date_range))}
 
-    OC_EC_hourly['OC'][:] = np.nan
-    OC_EC_hourly['EC'][:] = np.nan
+    OC_BC_hourly['CORG'][:] = np.nan
+    OC_BC_hourly['CBLK'][:] = np.nan
 
     # fill hourly data
-    for aer_i in ['OC', 'EC']:
+    for aer_i in ['CORG', 'CBLK']:
 
         # for each day, spready data out into the hourly slots
         # do not include the last time, as it cannot be used as a start time (fullday)
-        for t, fullday in enumerate(OC_EC_in['time'][:-1]):
+        for t, fullday in enumerate(OC_BC_in['time'][:-1]):
 
             # start = fullday
             # end = fullday + dt.timedelta(days=1)
 
             # linearly interpolate between the two main dates
-            interp = np.linspace(OC_EC_in[aer_i][t], OC_EC_in[aer_i][t+1],24)
+            interp = np.linspace(OC_BC_in[aer_i][t], OC_BC_in[aer_i][t+1],24)
 
             # idx range as the datetimes are internally complete, therefore a number sequence can be used without np.where()
             idx = np.arange(((t+1)*24)-24, (t+1)*24)
 
             # put the values in
-            OC_EC_hourly[aer_i][idx] = interp
+            OC_BC_hourly[aer_i][idx] = interp
 
 
-    return OC_EC_hourly
+    return OC_BC_hourly
 
 def WXT_hourly_average(WXT_in):
 
@@ -432,6 +434,108 @@ def convert_mass_to_kg_kg(mass, WXT, aer_particles):
 
     return mass_kg_kg, WXT
 
+def merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly):
+
+    """
+    Merge (including time matching) the PM10 masses together (OC and BC in with the others).
+    RH used in time matching but is not merged with the PM10 data
+
+    :param WXT_hourly:
+    :param PM10_mass_in:
+    :param OC_BC_hourly:
+    :return:
+    """
+
+    # merge PM10 data (time will match WXT_hourly)
+    PM10_mass_all = {'time': WXT_hourly['time']}
+    for key, data in PM10_mass_in.iteritems():
+        if key != 'time':
+           PM10_mass_all[key] = np.empty(len(PM10_mass_all['time']))
+           PM10_mass_all[key][:] = np.nan
+
+    for key in OC_BC_hourly.iterkeys():
+        if key != 'time':
+           PM10_mass_all[key] = np.empty(len(PM10_mass_all['time']))
+           PM10_mass_all[key][:] = np.nan
+
+    # fill the PM10_merge arrays
+    for t, time_t in enumerate(PM10_mass_all['time']):
+        # _, idx_pm10, _ = eu.nearest(PM10_mass_in['time'], time_t)
+        idx_pm10 = np.where(PM10_mass_in['time'] == time_t)
+
+        if idx_pm10[0].size != 0:
+            for key, data in PM10_mass_in.iteritems():
+                if key != 'time':
+                    PM10_mass_all[key][t] = data[idx_pm10]
+
+        idx_oc_bc = np.where(OC_BC_hourly['time'] == time_t)
+        if idx_oc_bc[0].size != 0:
+            for key, data in OC_BC_hourly.iteritems():
+                if key != 'time':
+                    PM10_mass_all[key][t] = data[idx_oc_bc]
+
+
+    # set mass and WXT data as the hourly data values
+    mass = PM10_mass_all
+    WXT = WXT_hourly
+
+    return mass, WXT
+
+def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic, dN):
+
+    """
+
+    :param aer_particles:
+    :param mass_kg_kg:
+    :param aer_density:
+    :param r_d_classic:
+    :return:
+    """
+
+    # work out Number concentration (relative weight) for each species
+    # calculate the number of particles for each species using radius_m and the mass
+    num_part = {}
+    for aer_i in aer_particles:
+        num_part[aer_i] = mass_kg_kg[aer_i] / ((4.0/3.0) * np.pi * (aer_density[aer_i]/WXT['dryair_rho']) * (r_d_classic[aer_i] ** 3.0))
+
+    # find relative N from N(mass, r_md)
+    N_weight = {}
+    num_conc = {}
+    for aer_i in aer_particles:
+
+        # relative weighting of N for each species
+        N_weight[aer_i] = num_part[aer_i] / np.nansum(np.array(num_part.values()), axis=0)
+
+        # estimated number for the species, from the main distribution data, using the weighting
+        num_conc[aer_i] = np.tile(N_weight[aer_i], (len(dN['med']),1)).transpose() * \
+                          np.tile(dN['med'], (len(N_weight[aer_i]),1))
+
+
+    return N_weight, num_conc
+
+def calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density):
+
+
+    """
+    Calculate the dry volume from the mass of all the species
+    :param aer_particles:
+    :param mass_kg_kg:
+    :param aer_density:
+    :return:
+    """
+
+    # calculate dry volume
+    V_dry_from_mass = {}
+    for aer_i in aer_particles:
+        # V_dry[aer_i] = (4.0/3.0) * np.pi * (r_d_m ** 3.0)
+        V_dry_from_mass[aer_i] = mass_kg_kg[aer_i] / aer_density[aer_i]  # [m3]
+
+        # if np.nan (i.e. there was no mass therefore no volume) make it 0.0
+        bin = np.isnan(V_dry_from_mass[aer_i])
+        V_dry_from_mass[aer_i][bin] = 0.0
+
+    return V_dry_from_mass
+
 # Swelling
 
 def calc_r_md_species(r_d_microns, WXT, aer_i):
@@ -585,7 +689,8 @@ def calc_r_md_species(r_d_microns, WXT, aer_i):
 
 # Optical properties
 
-def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet, num_conc, datadir='', picklesave=True):
+def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet, num_conc,
+                          datadir='', picklesave=True, extra='', savesubdir=''):
 
     # Calculate Q_dry for each bin and species.
     #   The whole averaging thing up to cross sections comes later (Geisinger et al., 2016)
@@ -611,54 +716,57 @@ def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet
     # 1) for aer_i in aerosols
     for aer_i in aer_particles:
 
-        # status tracking
-        print '  ' + aer_i
-
-        Q_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
-        Q_ext[aer_i][:] = np.nan
-
-        Q_back[aer_i] = np.empty(r_md_m[aer_i].shape)
-        Q_back[aer_i][:] = np.nan
-
-        C_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
-        C_ext[aer_i][:] = np.nan
-
-        C_back[aer_i] = np.empty(r_md_m[aer_i].shape)
-        C_back[aer_i][:] = np.nan
-
-        sigma_ext[aer_i] = np.empty(len(date_range))
-        sigma_ext[aer_i][:] = np.nan
-
-        sigma_back[aer_i] = np.empty(len(date_range))
-        sigma_back[aer_i][:] = np.nan
-
-        # 2) for time, t
-        for t, time_t in enumerate(date_range):
+        # if the aerosol has a number concentration above 0 (therefore sigma_aer_i > 0)
+        if np.nansum(num_conc[aer_i]) != 0.0:
 
             # status tracking
-            if t in np.arange(0, 35000, 1000):
-                print '     ' + str(t)
+            print '  ' + aer_i
 
-            # 3) for radii bin, r
-            for r, r_md_t_r in enumerate(r_md_m[aer_i][t, :]):
+            Q_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
+            Q_ext[aer_i][:] = np.nan
 
-                X_t_r = X[aer_i][t, r]  # size parameter_t (for all sizes at time t)
-                n_wet_t_r = n_wet[aer_i][t, r]  # complex index of refraction t (for all sizes at time t)
+            Q_back[aer_i] = np.empty(r_md_m[aer_i].shape)
+            Q_back[aer_i][:] = np.nan
+
+            C_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
+            C_ext[aer_i][:] = np.nan
+
+            C_back[aer_i] = np.empty(r_md_m[aer_i].shape)
+            C_back[aer_i][:] = np.nan
+
+            sigma_ext[aer_i] = np.empty(len(date_range))
+            sigma_ext[aer_i][:] = np.nan
+
+            sigma_back[aer_i] = np.empty(len(date_range))
+            sigma_back[aer_i][:] = np.nan
+
+            # 2) for time, t
+            for t, time_t in enumerate(date_range):
+
+                # status tracking
+                if t in np.arange(0, 35000, 1000):
+                    print '     ' + str(t)
+
+                # 3) for radii bin, r
+                for r, r_md_t_r in enumerate(r_md_m[aer_i][t, :]):
+
+                    X_t_r = X[aer_i][t, r]  # size parameter_t (for all sizes at time t)
+                    n_wet_t_r = n_wet[aer_i][t, r]  # complex index of refraction t (for all sizes at time t)
 
 
-                if np.logical_and(~np.isnan(X_t_r), ~np.isnan(n_wet_t_r)):
+                    if np.logical_and(~np.isnan(X_t_r), ~np.isnan(n_wet_t_r)):
 
-                    # Q_back / 4.0pi as normal .qb() is a hemispherical backscatter, and we want specifically 180 deg.
-                    particle = Mie(x=X_t_r, m=n_wet_t_r)
-                    Q_ext[aer_i][t, r] = particle.qext()
-                    Q_back[aer_i][t, r] = particle.qb() / (4.0 * np.pi)
+                        # Q_back / 4.0pi as normal .qb() is a hemispherical backscatter, and we want specifically 180 deg.
+                        particle = Mie(x=X_t_r, m=n_wet_t_r)
+                        Q_ext[aer_i][t, r] = particle.qext()
+                        Q_back[aer_i][t, r] = particle.qb() / (4.0 * np.pi)
 
-                    # calculate extinction cross section
-                    C_ext[aer_i][t, r] = Q_ext[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
-                    C_back[aer_i][t, r] = Q_back[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
+                        # calculate extinction cross section
+                        C_ext[aer_i][t, r] = Q_ext[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
+                        C_back[aer_i][t, r] = Q_back[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
 
-            sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
-            sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
+                sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
+                sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
 
     sigma_ext_tot = np.nansum(sigma_ext.values(), axis=0)
     sigma_back_tot = np.nansum(sigma_back.values(), axis=0)
@@ -667,7 +775,7 @@ def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet
     if picklesave == True:
         if datadir != '':
             pickle_save = {'time': date_range, 'S': S}
-            with open(datadir + 'pickle/S_woSoot_2016_equalWeight_lt60.pickle', 'wb') as handle:
+            with open(datadir + 'pickle/S_'+savesubdir+'_2016_equalWeight_lt60_'+extra+'.pickle', 'wb') as handle:
                 pickle.dump(pickle_save, handle)
         else:
             raise ValueError('picklesave = True but datadir was not given!')
@@ -698,8 +806,8 @@ def main():
     datadir = '/home/nerc/Documents/MieScatt/data/'
 
     # save dir
-    savesubdir = 'PM1_noSoot/'
-    savedir = maindir + 'figures/LidarRatio/' + savesubdir
+    savesubdir = 'PM10_noSoot'
+    savedir = maindir + 'figures/LidarRatio/' + savesubdir +'/'
 
     # data
     wxtdatadir = datadir
@@ -732,8 +840,6 @@ def main():
                    'CORG': 1100.0,
                    'CBLK': 1200.0}
 
-    # Organic carbon growth curve (Assumed to be the same as aged fossil fuel organic carbon)
-
 
     # pure water density
     water_density = 1000.0 # kg m-3
@@ -748,6 +854,10 @@ def main():
                   'CORG': 1.2e-01,
                   'CBLK': 3.0e-02}
 
+
+    # use PM1 or PM10 data?
+    process_type = 'PM10'
+
     # ==============================================================================
     # Read data
     # ==============================================================================
@@ -758,25 +868,8 @@ def main():
     # Read in physical growth factors (GF) for organic carbon (assumed to be the same as aged fossil fuel OC)
     gf_ffoc_raw = eu.csv_read(ffoc_gfdir + 'GF_fossilFuelOC_calcS.csv')
     gf_ffoc_raw = np.array(gf_ffoc_raw)[1:, :] # skip header
-
     gf_ffoc = {'RH_frac': np.array(gf_ffoc_raw[:,0], dtype=float),
-                'GF': np.array(gf_ffoc_raw[:,1], dtype=float)}
-
-
-    # Read in species by mass data
-    # Units are grams m-3
-    mass_in = read_PM1_mass_data(massdatadir, year)
-
-    # Read in the daily EC and OC data
-    OC_EC_in = read_EC_OC_mass_data(massdatadir, year)
-
-    # linearly interpolate daily data to hourly
-    OC_EC_hourly = OC_EC_interp_hourly(OC_EC_in)
-
-
-    # Read in the hourly other PM10 data
-    PM10_mass_in = read_PM10_mass_data(massdatadir, year)
-
+                'GF': np.array(gf_ffoc_raw[:, 1], dtype=float)}
 
     # Read WXT data
     wxtfilepath = wxtdatadir + wxt_inst_site + '_' + year + '_15min.nc'
@@ -784,86 +877,65 @@ def main():
     WXT_in['RH_frac'] = WXT_in['RH'] * 0.01
     WXT_in['time'] -= dt.timedelta(minutes=15) # change time from 'obs end' to 'start of obs', same as the other datasets
 
-    # average WXT data up to hourly
-    WXT_hourly = WXT_hourly_average(WXT_in)
+    # load in S data
+    filename = datadir + 'pickle/' + 'S_woSoot_2016_equalWeight_lt60_PM1.pickle'
+    with open(filename, 'rb') as handle:
+        S_loaded = pickle.load(handle)
+
+    # Read in species by mass data
+    if process_type == 'PM1':
+
+        # Units are grams m-3
+        PM1_mass_in = read_PM1_mass_data(massdatadir, year)
+
+        # Trim times
+        # as WXT and mass data are 15 mins and both line up exactly already
+        #   therefore trim WXT to match mass time
+        PM1_mass_in, WXT_in = trim_mass_wxt_times(mass_in, WXT_in)
+
+        # Time match so mass and WXT times line up INTERNALLY as well
+        date_range = np.array(eu.date_range(WXT_in['time'][0], WXT_in['time'][-1], 15, 'minutes'))
+
+        # make sure there are no time stamp gaps in the data so mass and WXT will match up perfectly, timewise.
+        print 'beginning time matching for WXT...'
+        WXT = internal_time_completion(WXT_in, date_range)
+        print 'end time matching for WXT...'
+
+        # same but for mass data
+        print 'beginning time matching for mass...'
+        PM1_mass = internal_time_completion(PM1_mass_in, date_range)
+        print 'end time matching for mass...'
+
+    elif process_type == 'PM10':
+
+        # Read in the daily EC and OC data
+        OC_BC_in = read_EC_BC_mass_data(massdatadir, year)
+
+        # linearly interpolate daily data to hourly
+        OC_BC_hourly = OC_BC_interp_hourly(OC_BC_in)
 
 
-    # merge PM10 data (time will match WXT_hourly)
-    hourly = {'time': WXT_hourly['time']}
-    for key, data in PM10_mass_in.iteritems():
-        if key != 'time':
-           hourly[key] = np.empty(len(hourly['time']))
-           hourly[key][:] = np.nan
+        # Read in the hourly other PM10 data
+        PM10_mass_in = read_PM10_mass_data(massdatadir, year)
 
-    for key in OC_EC_hourly.iterkeys():
-        if key != 'time':
-           hourly[key] = np.empty(len(hourly['time']))
-           hourly[key][:] = np.nan
+        # average WXT data up to hourly
+        WXT_hourly = WXT_hourly_average(WXT_in)
 
-    # fill the PM10_merge arrays
-    for t, time_t in enumerate(hourly['time']):
-        # _, idx_pm10, _ = eu.nearest(PM10_mass_in['time'], time_t)
-        idx_pm10 = np.where(PM10_mass_in['time'] == time_t)
-
-        if idx_pm10[0].size != 0:
-            for key, data in PM10_mass_in.iteritems():
-                if key != 'time':
-                    hourly[key][t] = data[idx_pm10]
-
-        idx_oc_ec = np.where(OC_EC_hourly['time'] == time_t)
-        if idx_oc_ec[0].size != 0:
-            for key, data in OC_EC_hourly.iteritems():
-                if key != 'time':
-                    hourly[key][t] = data[idx_oc_ec]
-
-
-    # time match WXT_hourly to PM10 data
+        # merge the PM10 data together and used RH to do it. RH and PM10 merged datasets will be temporally in sync.
+        mass, WXT = merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly)
 
 
 
 
-    # Trim times
-    # as WXT and mass data are 15 mins and both line up exactly already
-    #   therefore trim WXT to match mass time
-    mass_in, WXT_in = trim_mass_wxt_times(mass_in, WXT_in)
 
-    # Time match so mass and WXT times line up INTERNALLY as well
-    date_range = np.array(eu.date_range(WXT_in['time'][0], WXT_in['time'][-1], 15, 'minutes'))
+    # if pm1
+    # mass = pm1_mass
+    #if pm10
+    # ...
+    # if pm10minus1
+    # pm10minus1 =
+    # pm1 =
 
-    # make sure there are no time stamp gaps in the data so mass and WXT will match up perfectly, timewise.
-    print 'beginning time matching for WXT...'
-    WXT = internal_time_completion(WXT_in, date_range)
-    print 'end time matching for WXT...'
-
-    # same but for mass data
-    print 'beginning time matching for mass...'
-    mass = internal_time_completion(mass_in, date_range)
-    print 'end time matching for mass...'
-
-    # # Create idealised number distribution for now... (dry distribution)
-    # # idealised dist is equal for all particle types for now.
-    # step = 0.005
-    # r_range_um = np.arange(0.000 + step, 5.000 + step, step)
-    # r_range_m = r_range_um * 1.0e-06
-    #
-    # r_mean = np.log10(0.11e-06)
-    # # sigma = np.log(np.log10(1.6))  # natural log of geometric stddev = arithmetic stdev
-    # # FWHM =
-    # sigma = 0.2
-    #
-    # log_r = np.log10(r_range_m)
-    # weights = np.array([normpdf(r_i, r_mean, sigma) for r_i in log_r]) # weights applied in log space
-    # # plt.plot(np.log10(r_range_um), weights, color='green')
-    # # plt.xlim([0.001, 1.0])
-    # # plt.axvline(0.04)
-    # # plt.axvline(1.0)
-    #
-    # plt.semilogx(r_range_um, weights, color='green')
-    # plt.xlim([0.0, 1.0])
-    # plt.axvline(0.04)
-    # plt.axvline(1.0)
-    # # get values for the C_ext weighting (Geisinger et al., 2016)
-    # # r_top = r_range_m[1:] - r_range_m[:-1] / 2?
 
     # read in clearflo winter number distribution
     # created on main PC space with calc_plot_N_r_obs.py
@@ -921,33 +993,10 @@ def main():
 
     # work out Number concentration (relative weight) for each species
     # calculate the number of particles for each species using radius_m and the mass
-    # Hopefull not needed!
-    num_part = {}
-    for aer_i in aer_particles:
-        num_part[aer_i] = mass_kg_kg[aer_i] / ((4.0/3.0) * np.pi * (aer_density[aer_i]/WXT['dryair_rho']) * (r_d_classic[aer_i] ** 3.0))
+    N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic, dN)
 
-    # find relative N from N(mass, r_md)
-    N_weight = {}
-    num_conc = {}
-    for aer_i in aer_particles:
-
-        # relative weighting of N for each species
-        N_weight[aer_i] = num_part[aer_i] / np.nansum(np.array(num_part.values()), axis=0)
-
-        # estimated number for the species, from the main distribution data, using the weighting
-        num_conc[aer_i] = np.tile(N_weight[aer_i], (len(dN['med']),1)).transpose() * \
-                          np.tile(dN['med'], (len(N_weight[aer_i]),1))
-
-
-    # calculate dry volume
-    V_dry_from_mass = {}
-    for aer_i in aer_particles:
-        # V_dry[aer_i] = (4.0/3.0) * np.pi * (r_d_m ** 3.0)
-        V_dry_from_mass[aer_i] = mass_kg_kg[aer_i] / aer_density[aer_i]  # [m3]
-
-        # if np.nan (i.e. there was no mass therefore no volume) make it 0.0
-        bin = np.isnan(V_dry_from_mass[aer_i])
-        V_dry_from_mass[aer_i][bin] = 0.0
+    # calculate dry volume from the mass of each species
+    V_dry_from_mass = calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density)
 
     # ---------------------------------------------------------
     # Swell the particles (r_md,aer_i) [microns]
@@ -969,9 +1018,9 @@ def main():
     r_md['CBLK'] = r_d_microns_dup
 
     # calculate r_md for organic carbon using the MO empirically fitted g(RH) curves
-    r_md['CORG'] = np.empty((len(date_range), len(r_d_microns)))
+    r_md['CORG'] = np.empty((len(WXT['time']), len(r_d_microns)))
     r_md['CORG'][:] = np.nan
-    for t, time_t in enumerate(date_range):
+    for t, time_t in enumerate(WXT['time']):
 
         _, idx, _ = eu.nearest(gf_ffoc['RH_frac'], WXT['RH_frac'][t])
         r_md['CORG'][t, :] = r_d_microns * gf_ffoc['GF'][idx]
@@ -984,11 +1033,7 @@ def main():
     # -----------------------------------------------------------
 
     # caulate the physical growth factor for the particles (swollen radii / dry radii)
-
     GF = {}
-    # aer_wet_density = {}
-    V_wet_from_mass = {}
-    V_water_i  = {}
     for aer_i in aer_particles: # aer_particles:
 
         # physical growth factor
@@ -1000,7 +1045,6 @@ def main():
     # calculate n_wet for each rbin (complex refractive index of dry aerosol and water based on physical growth)
     #   follows CLASSIC scheme
     n_wet = {}
-
 
     for aer_i in aer_particles: # aer_particles:
 
@@ -1032,13 +1076,13 @@ def main():
     # --------------------------
 
     # The main beast. Calculate all the optical properties, and outputs the lidar ratio
-    S = calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet, num_conc,
-                              datadir=datadir, picklesave=True)
+    S = calculate_lidar_ratio(aer_particles, WXT['time'], ceil_lambda, r_md_m,  n_wet, num_conc,
+                              datadir=datadir, picklesave=True, extra=process_type)
 
     # get mean and nanstd from data
     # set up the date range to fill (e.g. want daily statistics then stats_date_range = daily resolution)
-    stats_date_range = np.array(eu.date_range(date_range[0], date_range[-1] + dt.timedelta(days=1), 1, 'days'))
     # stats = eu.simple_statistics(S, date_range, stats_date_range, np.nanmean, np.nanstd, np.nanmedian)
+    stats_date_range = np.array(eu.date_range(WXT['time'][0], WXT['time'][-1] + dt.timedelta(days=1), 1, 'days'))
 
     stats ={}
 
@@ -1050,7 +1094,7 @@ def main():
     for t, start, end in zip(np.arange(len(stats_date_range[:-1])), stats_date_range[:-1], stats_date_range[1:]):
 
         # get location of time period's data
-        bool = np.logical_and(date_range >=start, date_range<=end)
+        bool = np.logical_and(WXT['time'] >=start, WXT['time']<=end)
 
         # extract data
         subsample = S[bool]
@@ -1061,36 +1105,53 @@ def main():
         stats['25pct'][t] = np.percentile(subsample, 25)
         stats['75pct'][t] = np.percentile(subsample, 75)
 
-
+    # TIMESERIES - S - stats
     # plot daily statistics of S
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
     ax.plot_date(stats_date_range, stats['mean'], fmt='-')
     ax.fill_between(stats_date_range, stats['mean'] - stats['stdev'], stats['mean'] + stats['stdev'], alpha=0.3, facecolor='blue')
-    plt.suptitle('Lidar Ratio:\n no soot; PM1 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    plt.suptitle('Lidar Ratio:\n no soot; PM10 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Date [dd/mm]')
+    plt.ylim([20.0, 60.0])
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_2016_PM1_nosoot_daily_timeseries_lt60.png')
+    plt.savefig(savedir + 'S_2016_'+savesubdir+'_'+process_type+'_dailybinned_lt60.png')
     plt.close(fig)
 
+    # HISTOGRAM - S
     # plot all the S in raw form (hist)
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
     ax.hist(S[~np.isnan(S)])
-    plt.suptitle('Lidar Ratio:\n no soot; PM1 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    plt.suptitle('Lidar Ratio:\n no soot; PM10 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Lidar Ratio')
     plt.ylabel('Frequency')
-    plt.savefig(savedir + 'S_2016_PM1_nosoot_histogram_lt60.png')
+    plt.savefig(savedir + 'S_2016_'+savesubdir+'_'+process_type+'_histogram_lt60.png')
     plt.close(fig)
 
+    # TIMESERIES - S - not binned
     # plot all the S in raw form (plot_date)
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
-    ax.plot_date(date_range, S, fmt='-')
-    plt.suptitle('Lidar Ratio:\n no soot; PM1 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    ax.plot_date(WXT['time'], S, fmt='-')
+    plt.suptitle('Lidar Ratio:\n no soot; PM10 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Date [dd/mm]')
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_2016_PM1_nosoot_timeseries_lt60.png')
+    plt.savefig(savedir + 'S_2016_'+savesubdir+'_'+process_type+'_timeseries_lt60.png')
     plt.close(fig)
+
+    # SCATTER - S vs RH (PM1)
+    # quick plot 15 min S and RH for 2016.
+    # corr = spearmanr(WXT_t['RH'],S_loaded['S'])
+    # r_str = '%.2f' % corr[0]
+    # fig, ax = plt.subplots(1,1,figsize=(8, 5))
+    # ax.scatter(WXT_t['RH'],S_loaded['S'])
+    # plt.suptitle('Lidar Ratio - r='+r_str+':\n no soot; PM1 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    # plt.xlabel('RH')
+    # #ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
+    # plt.ylabel('Lidar Ratio')
+    # plt.savefig(maindir + 'figures/LidarRatio/PM1_noSoot/' + \
+    #             'S_vs_RH_2016_PM1_noSoot_'+process_type+'_scatter_lt60.png')
+    # plt.close(fig)
 
     # ------------------------------------------------
 
@@ -1197,60 +1258,66 @@ def main():
     #
     # # --------------------------
     #
-    # # Testing lidar ratio computation
-    #
-    # # read in Franco's computation of the lidar ratio CIR=1.47 + 0.099i, lambda=905nm
-    # lr_f = eu.netCDF_read('/home/nerc/Documents/MieScatt/testing/lr_1.47_0.099_0.905.nc',['DIAMETER','LIDAR_RATIO'])
-    #
-    # step = 0.005
-    # r_range_um = np.arange(0.000 + step, 10.000 + step, step)
-    # r_range_m = r_range_um * 1.0e-06
-    # x_range = (2.0 * np.pi * r_range_m)/ceil_lambda[0]
-    #
-    #
-    # # calculate Q_back and Q_ext from the avergae r_md and n_mixed
-    # #S_r = lidar ratio
-    # S_r = np.empty(len(r_range_m))
-    # S_r[:] = np.nan
-    # for r_idx, r_i in enumerate(r_range_m):
-    #
-    #     x_i = x_range[r_idx]  # size parameter_i
-    #     n_i = complex(1.47 + 0.099j)  # fixed complex index of refraction i
-    #
-    #     # print loop progress
-    #     if r_idx in np.arange(0, 2100, 100):
-    #         print r_idx
-    #
-    #
-    #     particle = Mie(x=x_i, m=n_i)
-    #     Q_ext = particle.qext()
-    #     Q_back = particle.qb()
-    #     Q_back_alt = Q_back / (4.0 * np.pi)
-    #
-    #     # #Q_back = particle.qb()
-    #     # S12 = particle.S12(-1)
-    #     # S11 = S12[0].imag
-    #     # S22 = S12[1].imag
-    #     # Q_back_fancy = ((np.abs(S11)**2) + (np.abs(S22)**2))/(2 * np.pi * (x_i**2))
-    #
-    #
-    #     # calculate the lidar ratio
-    #     # S_t = Q_ext / Q_back
-    #     S_r[r_idx] = Q_ext / Q_back_alt
-    #
-    #
-    # # simple plot of S
-    # fig, ax = plt.subplots(1,1, figsize=(6,5))
-    # plt.loglog(r_range_um * 2, S_r, label='mine') # diameter [microns]
-    # plt.loglog(lr_f['DIAMETER'], lr_f['LIDAR_RATIO'],label='Franco''s')
-    # plt.xlim([0.01, 100.0])
-    # plt.ylim([1.0, 10.0e7])
-    # plt.ylabel('Lidar Ratio')
-    # plt.xlabel('Diameter [microns]')
-    # plt.legend()
-    # plt.tight_layout()
-    # plt.savefig(savedir + 'quickplot_S_vs_r.png')
-    # plt.close(fig)
+    # Testing lidar ratio computation
+
+    # read in Franco's computation of the lidar ratio CIR=1.47 + 0.099i, lambda=905nm
+    lr_f = eu.netCDF_read('/home/nerc/Documents/MieScatt/testing/lr_1.47_0.099_0.905.nc',['DIAMETER','LIDAR_RATIO'])
+
+    step = 0.005
+    r_range_um = np.arange(0.000 + step, 10.000 + step, step)
+    r_range_m = r_range_um * 1.0e-06
+    x_range = (2.0 * np.pi * r_range_m)/ceil_lambda[0]
+
+
+    # calculate Q_back and Q_ext from the avergae r_md and n_mixed
+    #S_r = lidar ratio
+    S_r = np.empty(len(r_range_m))
+    S_r[:] = np.nan
+    for r_idx, r_i in enumerate(r_range_m):
+
+        x_i = x_range[r_idx]  # size parameter_i
+        n_i = complex(1.47 + 0.0j)  # fixed complex index of refraction i
+        # n_i = complex(1.47 + 0.099j)  # fixed complex index of refraction i for soot
+
+        # print loop progress
+        if r_idx in np.arange(0, 2100, 100):
+            print r_idx
+
+
+        particle = Mie(x=x_i, m=n_i)
+        Q_ext = particle.qext()
+        Q_back = particle.qb()
+        Q_back_alt = Q_back / (4.0 * np.pi)
+
+        # #Q_back = particle.qb()
+        # S12 = particle.S12(-1)
+        # S11 = S12[0].imag
+        # S22 = S12[1].imag
+        # Q_back_fancy = ((np.abs(S11)**2) + (np.abs(S22)**2))/(2 * np.pi * (x_i**2))
+
+
+        # calculate the lidar ratio
+        # S_t = Q_ext / Q_back
+        S_r[r_idx] = Q_ext / Q_back_alt
+
+
+    # simple plot of S
+    fig, ax = plt.subplots(1,1, figsize=(8,7))
+    plt.loglog(r_range_um * 2, S_r, label='mine') # diameter [microns]
+    plt.loglog(lr_f['DIAMETER'], lr_f['LIDAR_RATIO'],label='Franco''s')
+
+    for aer_i, r_md_m_aer_i in r_md_m.iteritems():
+        for r_i in r_md_m_aer_i:
+            plt.vlines(r_i, 1 ,1e6, linestyle='--', alpha=0.5)
+
+    plt.xlim([0.01, 100.0])
+    plt.ylim([1.0, 10.0e7])
+    plt.ylabel('Lidar Ratio')
+    plt.xlabel('Diameter [microns]')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(maindir + 'figures/LidarRatio/' + 'quickplot_S_vs_r_with_rbin_lines.png')
+    plt.close(fig)
     #
     # # -----------------------------------------------
     #
