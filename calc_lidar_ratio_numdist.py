@@ -228,45 +228,7 @@ def normpdf(x, mean, sd):
 
 # Process
 
-def OC_BC_interp_hourly(OC_BC_in):
-
-    """
-    Increase EC and OC data resolution from daily to hourly with a simple linear interpolation
-
-    :param OC_BC_in:
-    :return:OC_BC_hourly
-    """
-
-    # Increase to hourly resolution by linearly interpolate between the measurement times
-    date_range = eu.date_range(OC_BC_in['time'][0], OC_BC_in['time'][-1] + dt.timedelta(days=1), 60, 'minutes')
-    OC_BC_hourly = {'time': date_range,
-                    'CORG': np.empty(len(date_range)),
-                    'CBLK': np.empty(len(date_range))}
-
-    OC_BC_hourly['CORG'][:] = np.nan
-    OC_BC_hourly['CBLK'][:] = np.nan
-
-    # fill hourly data
-    for aer_i in ['CORG', 'CBLK']:
-
-        # for each day, spready data out into the hourly slots
-        # do not include the last time, as it cannot be used as a start time (fullday)
-        for t, fullday in enumerate(OC_BC_in['time'][:-1]):
-
-            # start = fullday
-            # end = fullday + dt.timedelta(days=1)
-
-            # linearly interpolate between the two main dates
-            interp = np.linspace(OC_BC_in[aer_i][t], OC_BC_in[aer_i][t+1],24)
-
-            # idx range as the datetimes are internally complete, therefore a number sequence can be used without np.where()
-            idx = np.arange(((t+1)*24)-24, (t+1)*24)
-
-            # put the values in
-            OC_BC_hourly[aer_i][idx] = interp
-
-
-    return OC_BC_hourly
+## data in processing
 
 def WXT_hourly_average(WXT_in):
 
@@ -302,6 +264,135 @@ def WXT_hourly_average(WXT_in):
 
 
     return WXT_hourly
+
+def internal_time_completion(data, date_range):
+
+    """
+    Set up new dictionary for data with a complete time series (no gaps in the middle).
+    :param: data (must be a dictionary with a list of datetimes with the keyname 'time', i.e. data['time'])
+    :return: data_full
+
+    Done by checking if time_i from the complete date range (with no time gaps) exists in the data, and if so, extract
+    out the values and put it into the new dictionary.
+    """
+
+
+    # set up temporary dictionaries for data (e.g. data_full) with empty arrays for each key, ready to be filled
+    data_full = {}
+    for h in data.iterkeys():
+        data_full[h] = np.empty(len(date_range))
+        data_full[h][:] = np.nan
+
+    # replace time with date range
+    data_full['time'] = date_range
+
+    # step through time and time match data for extraction
+    for t, time_t in enumerate(date_range):
+        idx = np.where(data['time'] == time_t)[0]
+
+        # if not empty, put in the data to new array
+        if idx.size != 0:
+            for h in data.iterkeys():
+                data_full[h][t] = data[h][idx]
+
+    return data_full
+
+def merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly):
+
+    """
+    Merge (including time matching) the PM10 masses together (OC and BC in with the others).
+    RH used in time matching but is not merged with the PM10 data
+
+    :param WXT_hourly:
+    :param PM10_mass_in:
+    :param OC_BC_hourly:
+    :return:
+    """
+
+    # merge PM10 data (time will match WXT_hourly)
+    PM10_mass_all = {'time': WXT_hourly['time']}
+    for key, data in PM10_mass_in.iteritems():
+        if key != 'time':
+           PM10_mass_all[key] = np.empty(len(PM10_mass_all['time']))
+           PM10_mass_all[key][:] = np.nan
+
+    for key in OC_BC_hourly.iterkeys():
+        if key != 'time':
+           PM10_mass_all[key] = np.empty(len(PM10_mass_all['time']))
+           PM10_mass_all[key][:] = np.nan
+
+    # fill the PM10_merge arrays
+    for t, time_t in enumerate(PM10_mass_all['time']):
+        # _, idx_pm10, _ = eu.nearest(PM10_mass_in['time'], time_t)
+        idx_pm10 = np.where(PM10_mass_in['time'] == time_t)
+
+        if idx_pm10[0].size != 0:
+            for key, data in PM10_mass_in.iteritems():
+                if key != 'time':
+                    PM10_mass_all[key][t] = data[idx_pm10]
+
+        idx_oc_bc = np.where(OC_BC_hourly['time'] == time_t)
+        if idx_oc_bc[0].size != 0:
+            for key, data in OC_BC_hourly.iteritems():
+                if key != 'time':
+                    PM10_mass_all[key][t] = data[idx_oc_bc]
+
+
+    # set mass and WXT data as the hourly data values
+    mass = PM10_mass_all
+    WXT = WXT_hourly
+
+    return mass, WXT
+
+## masses and moles
+
+### main masses and moles script
+def calculate_moles_masses(mass, WXT, aer_particles):
+
+    """
+    Calculate the moles and mass [kg kg-1] of the aerosol
+    :param mass: [g cm-3]
+    :param WXT:
+    :param aer_particles:
+    :return: moles, mass_kg_kg
+    """
+
+    # molecular mass of each molecule
+    mol_mass_amm_sulp = 132
+    mol_mass_amm_nit = 80
+    mol_mass_nh4 = 18
+    mol_mass_n03 = 62
+    mol_mass_s04 = 96
+    mol_mass_Cl = 35.45
+
+    # Convert into moles
+    # calculate number of moles (mass [g] / molar mass)
+    # 1e-06 converts from micrograms to grams.
+    moles = {'SO4': mass['SO4'] / mol_mass_s04,
+             'NO3': mass['NO3'] / mol_mass_n03,
+             'NH4': mass['NH4'] / mol_mass_nh4,
+             'CL':  mass['CL'] / mol_mass_Cl}
+
+
+    # calculate ammonium sulphate and ammonium nitrate from gases
+    # adds entries to the existing dictionary
+    moles, mass = calc_amm_sulph_and_amm_nit_from_gases(moles, mass)
+
+    # convert chlorine into sea salt assuming all chlorine is sea salt, and enough sodium is present.
+    #      potentially weak assumption for the chlorine bit due to chlorine depletion!
+    mass['NaCl'] = mass['CL'] * 1.65
+    moles['NaCl'] = moles['CL']
+
+    # convert masses from g m-3 to kg kg-1_air for swelling.
+    # Also creates the air density and is stored in WXT
+    mass_kg_kg, WXT = convert_mass_to_kg_kg(mass, WXT, aer_particles)
+
+
+    # temporarily make black carbon mass nan
+    print ' SETTING BLACK CARBON MASS TO NAN'
+    mass_kg_kg['CBLK'][:] = np.nan
+
+    return moles, mass_kg_kg
 
 def calc_amm_sulph_and_amm_nit_from_gases(moles, mass):
 
@@ -376,38 +467,6 @@ def calc_amm_sulph_and_amm_nit_from_gases(moles, mass):
 
     return moles, mass
 
-def internal_time_completion(data, date_range):
-
-    """
-    Set up new dictionary for data with a complete time series (no gaps in the middle).
-    :param: data (must be a dictionary with a list of datetimes with the keyname 'time', i.e. data['time'])
-    :return: data_full
-
-    Done by checking if time_i from the complete date range (with no time gaps) exists in the data, and if so, extract
-    out the values and put it into the new dictionary.
-    """
-
-
-    # set up temporary dictionaries for data (e.g. data_full) with empty arrays for each key, ready to be filled
-    data_full = {}
-    for h in data.iterkeys():
-        data_full[h] = np.empty(len(date_range))
-        data_full[h][:] = np.nan
-
-    # replace time with date range
-    data_full['time'] = date_range
-
-    # step through time and time match data for extraction
-    for t, time_t in enumerate(date_range):
-        idx = np.where(data['time'] == time_t)[0]
-
-        # if not empty, put in the data to new array
-        if idx.size != 0:
-            for h in data.iterkeys():
-                data_full[h][t] = data[h][idx]
-
-    return data_full
-
 def convert_mass_to_kg_kg(mass, WXT, aer_particles):
 
     """
@@ -434,52 +493,47 @@ def convert_mass_to_kg_kg(mass, WXT, aer_particles):
 
     return mass_kg_kg, WXT
 
-def merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly):
+def OC_BC_interp_hourly(OC_BC_in):
 
     """
-    Merge (including time matching) the PM10 masses together (OC and BC in with the others).
-    RH used in time matching but is not merged with the PM10 data
+    Increase EC and OC data resolution from daily to hourly with a simple linear interpolation
 
-    :param WXT_hourly:
-    :param PM10_mass_in:
-    :param OC_BC_hourly:
-    :return:
+    :param OC_BC_in:
+    :return:OC_BC_hourly
     """
 
-    # merge PM10 data (time will match WXT_hourly)
-    PM10_mass_all = {'time': WXT_hourly['time']}
-    for key, data in PM10_mass_in.iteritems():
-        if key != 'time':
-           PM10_mass_all[key] = np.empty(len(PM10_mass_all['time']))
-           PM10_mass_all[key][:] = np.nan
+    # Increase to hourly resolution by linearly interpolate between the measurement times
+    date_range = eu.date_range(OC_BC_in['time'][0], OC_BC_in['time'][-1] + dt.timedelta(days=1), 60, 'minutes')
+    OC_BC_hourly = {'time': date_range,
+                    'CORG': np.empty(len(date_range)),
+                    'CBLK': np.empty(len(date_range))}
 
-    for key in OC_BC_hourly.iterkeys():
-        if key != 'time':
-           PM10_mass_all[key] = np.empty(len(PM10_mass_all['time']))
-           PM10_mass_all[key][:] = np.nan
+    OC_BC_hourly['CORG'][:] = np.nan
+    OC_BC_hourly['CBLK'][:] = np.nan
 
-    # fill the PM10_merge arrays
-    for t, time_t in enumerate(PM10_mass_all['time']):
-        # _, idx_pm10, _ = eu.nearest(PM10_mass_in['time'], time_t)
-        idx_pm10 = np.where(PM10_mass_in['time'] == time_t)
+    # fill hourly data
+    for aer_i in ['CORG', 'CBLK']:
 
-        if idx_pm10[0].size != 0:
-            for key, data in PM10_mass_in.iteritems():
-                if key != 'time':
-                    PM10_mass_all[key][t] = data[idx_pm10]
+        # for each day, spready data out into the hourly slots
+        # do not include the last time, as it cannot be used as a start time (fullday)
+        for t, fullday in enumerate(OC_BC_in['time'][:-1]):
 
-        idx_oc_bc = np.where(OC_BC_hourly['time'] == time_t)
-        if idx_oc_bc[0].size != 0:
-            for key, data in OC_BC_hourly.iteritems():
-                if key != 'time':
-                    PM10_mass_all[key][t] = data[idx_oc_bc]
+            # start = fullday
+            # end = fullday + dt.timedelta(days=1)
+
+            # linearly interpolate between the two main dates
+            interp = np.linspace(OC_BC_in[aer_i][t], OC_BC_in[aer_i][t+1],24)
+
+            # idx range as the datetimes are internally complete, therefore a number sequence can be used without np.where()
+            idx = np.arange(((t+1)*24)-24, (t+1)*24)
+
+            # put the values in
+            OC_BC_hourly[aer_i][idx] = interp
 
 
-    # set mass and WXT data as the hourly data values
-    mass = PM10_mass_all
-    WXT = WXT_hourly
+    return OC_BC_hourly
 
-    return mass, WXT
+## aerosol physical properties besides mass
 
 def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic, dN):
 
@@ -536,7 +590,7 @@ def calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density):
 
     return V_dry_from_mass
 
-# Swelling
+## swelling
 
 def calc_r_md_species(r_d_microns, WXT, aer_i):
 
@@ -897,7 +951,7 @@ def main():
     dN['med'] = np.nanmedian(dN['binned'], axis=0)
 
     # Read in species by mass data
-    if process_type == 'PM1':
+    if (process_type == 'PM1') | (process_type == 'PM10-1'):
 
         # Units are grams m-3
         PM1_mass_in = read_PM1_mass_data(massdatadir, year)
@@ -905,7 +959,7 @@ def main():
         # Trim times
         # as WXT and mass data are 15 mins and both line up exactly already
         #   therefore trim WXT to match mass time
-        PM1_mass_in, WXT_in = trim_mass_wxt_times(mass_in, WXT_in)
+        PM1_mass_in, WXT_in = trim_mass_wxt_times(PM1_mass_in, WXT_in)
 
         # Time match so mass and WXT times line up INTERNALLY as well
         date_range = np.array(eu.date_range(WXT_in['time'][0], WXT_in['time'][-1], 15, 'minutes'))
@@ -920,7 +974,7 @@ def main():
         PM1_mass = internal_time_completion(PM1_mass_in, date_range)
         print 'end time matching for mass...'
 
-    elif process_type == 'PM10':
+    elif (process_type == 'PM10') | (process_type == 'PM10-1'):
 
         # Read in the daily EC and OC data
         OC_BC_in = read_EC_BC_mass_data(massdatadir, year)
@@ -936,62 +990,17 @@ def main():
         WXT_hourly = WXT_hourly_average(WXT_in)
 
         # merge the PM10 data together and used RH to do it. RH and PM10 merged datasets will be temporally in sync.
-        mass, WXT = merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly)
-
-
-
-
-
-    # if pm1
-    # mass = pm1_mass
-    #if pm10
-    # ...
-    # if pm10minus1
-    # pm10minus1 =
-    # pm1 =
-
-
-
+        PM10_mass, WXT = merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly)
 
 
     # ==============================================================================
     # Process data
     # ==============================================================================
 
-    # molecular mass of each molecule
-    mol_mass_amm_sulp = 132
-    mol_mass_amm_nit = 80
-    mol_mass_nh4 = 18
-    mol_mass_n03 = 62
-    mol_mass_s04 = 96
-    mol_mass_Cl = 35.45
+    # if process_type == 'PM1':
 
-    # Convert into moles
-    # calculate number of moles (mass [g] / molar mass)
-    # 1e-06 converts from micrograms to grams.
-    moles = {'SO4': mass['SO4'] / mol_mass_s04,
-             'NO3': mass['NO3'] / mol_mass_n03,
-             'NH4': mass['NH4'] / mol_mass_nh4,
-             'CL':  mass['CL'] / mol_mass_Cl}
-
-
-    # calculate ammonium sulphate and ammonium nitrate from gases
-    # adds entries to the existing dictionary
-    moles, mass = calc_amm_sulph_and_amm_nit_from_gases(moles, mass)
-
-    # convert chlorine into sea salt assuming all chlorine is sea salt, and enough sodium is present.
-    #      potentially weak assumption for the chlorine bit due to chlorine depletion!
-    mass['NaCl'] = mass['CL'] * 1.65
-    moles['NaCl'] = moles['CL']
-
-    # convert masses from g m-3 to kg kg-1_air for swelling.
-    # Also creates the air density and is stored in WXT
-    mass_kg_kg, WXT = convert_mass_to_kg_kg(mass, WXT, aer_particles)
-
-
-    # temporarily make black carbon mass nan
-    print ' SETTING BLACK CARBON MASS TO NAN'
-    mass_kg_kg['CBLK'][:] = np.nan
+    # calculate the moles and the mass [kg kg-1] from mass [g cm-3] and WXT data
+    moles, mass_kg_kg = calculate_moles_masses(mass, WXT, aer_particles)
 
     # work out Number concentration (relative weight) for each species
     # calculate the number of particles for each species using radius_m and the mass
