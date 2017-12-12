@@ -482,14 +482,14 @@ def convert_mass_to_kg_kg(mass, WXT, aer_particles):
     T_K = WXT['Tair'] + 273.15
     p_Pa = WXT['press'] * 100.0
 
-    # density of air [kg -3] # assumes dry air atm
+    # density of air [kg m-3] # assumes dry air atm
     # p = rho * R * T [K]
     WXT['dryair_rho'] = p_Pa / (286.9 * T_K)
 
     # convert g m-3 air to kg kg-1 of air
     mass_kg_kg = {'time': mass['time']}
     for aer_i in aer_particles:
-        mass_kg_kg[aer_i] = mass[aer_i] * 1e-3 / WXT['dryair_rho']
+        mass_kg_kg[aer_i] = mass[aer_i] * 1e3 / WXT['dryair_rho']
 
     return mass_kg_kg, WXT
 
@@ -546,7 +546,7 @@ def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WX
     :return:
     """
 
-    # work out Number concentration (relative weight) for each species
+    # work out Number concentration (relative weight) for each species [m-3]
     # calculate the number of particles for each species using radius_m and the mass
     num_part = {}
     for aer_i in aer_particles:
@@ -557,10 +557,11 @@ def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WX
     num_conc = {}
     for aer_i in aer_particles:
 
-        # relative weighting of N for each species
+        # relative weighting of N for each species (aerosol_i / sum of all aerosol for each time)
         N_weight[aer_i] = num_part[aer_i] / np.nansum(np.array(num_part.values()), axis=0)
 
-        # estimated number for the species, from the main distribution data, using the weighting
+        # estimated number for the species, from the main distribution data, using the weighting,
+        #    for each time step
         num_conc[aer_i] = np.tile(N_weight[aer_i], (len(dN['med']),1)).transpose() * \
                           np.tile(dN['med'], (len(N_weight[aer_i]),1))
 
@@ -901,12 +902,17 @@ def main():
     # wavelength to aim for
     ceil_lambda = [0.905e-06]
 
-    # CLASSIC radii [m]
-    r_d_classic = {'(NH4)2SO4': 9.5e-02,
-                  'NH4NO3': 9.5e-02,
-                  'NaCl': 1.0e-01,
-                  'CORG': 1.2e-01,
-                  'CBLK': 3.0e-02}
+    # CLASSIC dry radii [microns]
+    r_d_classic_microns = {'(NH4)2SO4': 9.5e-02, # accumulation mode
+                  'NH4NO3': 9.5e-02, # accumulation mode
+                  'NaCl': 1.0e-01, # generic sea salt (fine mode)
+                  'CORG': 1.2e-01, # aged fosil fuel organic carbon
+                  'CBLK': 3.0e-02} # soot
+
+    # CLASSIC dry radii [m]
+    r_d_classic_m={}
+    for key, r in r_d_classic_microns.iteritems():
+        r_d_classic_m[key] = r * 1e-06
 
 
     # use PM1 or PM10 data?
@@ -932,7 +938,7 @@ def main():
     WXT_in['time'] -= dt.timedelta(minutes=15) # change time from 'obs end' to 'start of obs', same as the other datasets
 
     # load in S data
-    filename = datadir + 'pickle/' + 'S_woSoot_2016_equalWeight_lt60_PM1.pickle'
+    filename = datadir + 'pickle/' + 'S_woSoot_2016_equalWeight_lt60_PM10.pickle'
     with open(filename, 'rb') as handle:
         S_loaded = pickle.load(handle)
 
@@ -943,7 +949,7 @@ def main():
     with open(filename, 'rb') as handle:
         dN = pickle.load(handle)
 
-    # convert D and dD from nm to microns and save as separate variables for clarity further down
+    # convert D and dD from nm to microns and meters separately, and keep the variables for clarity further down
     r_d_microns = dN['D'] * 1e-03 / 2.0
     r_d_m = dN['D'] * 1e-09 / 2.0
 
@@ -953,7 +959,7 @@ def main():
     # Read in species by mass data
     if (process_type == 'PM1') | (process_type == 'PM10-1'):
 
-        # Units are grams m-3
+        # Read in mass data [grams m-3]
         PM1_mass_in = read_PM1_mass_data(massdatadir, year)
 
         # Trim times
@@ -976,14 +982,13 @@ def main():
 
     elif (process_type == 'PM10') | (process_type == 'PM10-1'):
 
-        # Read in the daily EC and OC data
+        # Read in the daily EC and OC data [grams m-3]
         OC_BC_in = read_EC_BC_mass_data(massdatadir, year)
 
         # linearly interpolate daily data to hourly
         OC_BC_hourly = OC_BC_interp_hourly(OC_BC_in)
 
-
-        # Read in the hourly other PM10 data
+        # Read in the hourly other PM10 data [grams m-3]
         PM10_mass_in = read_PM10_mass_data(massdatadir, year)
 
         # average WXT data up to hourly
@@ -1004,7 +1009,7 @@ def main():
 
     # work out Number concentration (relative weight) for each species
     # calculate the number of particles for each species using radius_m and the mass
-    N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic, dN)
+    N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic_m, dN)
 
     # calculate dry volume from the mass of each species
     V_dry_from_mass = calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density)
