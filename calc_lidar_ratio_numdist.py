@@ -744,8 +744,18 @@ def calc_r_md_species(r_d_microns, WXT, aer_i):
 
 # Optical properties
 
-def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet, num_conc,
-                          datadir='', picklesave=True, extra='', savesubdir=''):
+def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet, num_conc):
+
+    """
+    Calculate the lidar ratio and store all optic calculations in a single dictionary for export and pickle saving
+    :param aer_particles:
+    :param date_range:
+    :param ceil_lambda:
+    :param r_md_m:
+    :param n_wet:
+    :param num_conc:
+    :return: optics [dict]
+    """
 
     # Calculate Q_dry for each bin and species.
     #   The whole averaging thing up to cross sections comes later (Geisinger et al., 2016)
@@ -827,15 +837,11 @@ def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet
     sigma_back_tot = np.nansum(sigma_back.values(), axis=0)
     S = sigma_ext_tot / sigma_back_tot
 
-    if picklesave == True:
-        if datadir != '':
-            pickle_save = {'time': date_range, 'S': S}
-            with open(datadir + 'pickle/S_'+savesubdir+'_2016_equalWeight_lt60_'+extra+'.pickle', 'wb') as handle:
-                pickle.dump(pickle_save, handle)
-        else:
-            raise ValueError('picklesave = True but datadir was not given!')
+    # store all variables in a dictionary
+    optics = {'S': S, 'Q_ext':Q_ext, 'Q_back':Q_back, 'C_ext': C_ext, 'C_back': C_back,
+              'sigma_ext': sigma_ext, 'sigma_back': sigma_back}
 
-    return S
+    return optics
 
 
 def main():
@@ -853,21 +859,31 @@ def main():
     # Setup
     # ==============================================================================
 
-    # which modelled data to read in
-    model_type = 'UKV'
+    # use PM1 or PM10 data?
+    process_type = 'PM10'
+
+    # soot or no soot? ('soot' or 'noSoot')
+    soot_flag = 'noSoot'
+
+    # string for saving figures and choosing subdirectories
+    savesub = process_type+'_'+soot_flag
 
     # directories
     maindir = '/home/nerc/Documents/MieScatt/'
     datadir = '/home/nerc/Documents/MieScatt/data/'
 
     # save dir
-    savesubdir = 'PM10_noSoot'
+
+    savesubdir = savesub
     savedir = maindir + 'figures/LidarRatio/' + savesubdir +'/'
 
     # data
     wxtdatadir = datadir
     massdatadir = datadir
     ffoc_gfdir = datadir
+
+    # save all output data as a pickle?
+    picklesave = True
 
     # RH data
     wxt_inst_site = 'WXT_KSSW'
@@ -914,9 +930,9 @@ def main():
     for key, r in r_d_classic_microns.iteritems():
         r_d_classic_m[key] = r * 1e-06
 
-
-    # use PM1 or PM10 data?
-    process_type = 'PM10'
+    # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
+    pm1t10_rv_microns = 1.9848902137534531 / 2.0
+    pm1t10_rv_m = pm1t10_rv_microns / 1.0e-6
 
     # ==============================================================================
     # Read data
@@ -979,6 +995,7 @@ def main():
         print 'beginning time matching for mass...'
         PM1_mass = internal_time_completion(PM1_mass_in, date_range)
         print 'end time matching for mass...'
+
 
     elif (process_type == 'PM10') | (process_type == 'PM10-1'):
 
@@ -1092,8 +1109,19 @@ def main():
     # --------------------------
 
     # The main beast. Calculate all the optical properties, and outputs the lidar ratio
-    S = calculate_lidar_ratio(aer_particles, WXT['time'], ceil_lambda, r_md_m,  n_wet, num_conc,
-                              datadir=datadir, picklesave=True, extra=process_type)
+    optics = calculate_lidar_ratio(aer_particles, WXT['time'], ceil_lambda, r_md_m,  n_wet, num_conc)
+
+    # extract out the lidar ratio
+    S = optics['S']
+
+    # pickle save
+    if picklesave == True:
+
+        if (process_type == 'PM1') | (process_type == 'PM10'):
+            pickle_save = {'time': WXT['time'], 'optics': optics, 'WXT':WXT,
+                           'num_conc':num_conc, 'mass': mass, 'dN':dN, 'r_md':r_md}
+            with open(datadir + 'pickle/allvars_'+savesub+'_'+year+'.pickle', 'wb') as handle:
+                pickle.dump(pickle_save, handle)
 
     # get mean and nanstd from data
     # set up the date range to fill (e.g. want daily statistics then stats_date_range = daily resolution)
@@ -1126,48 +1154,46 @@ def main():
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
     ax.plot_date(stats_date_range, stats['mean'], fmt='-')
     ax.fill_between(stats_date_range, stats['mean'] - stats['stdev'], stats['mean'] + stats['stdev'], alpha=0.3, facecolor='blue')
-    plt.suptitle('Lidar Ratio:\n no soot; PM10 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    plt.suptitle('Lidar Ratio:\n'+savesub+'masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Date [dd/mm]')
     plt.ylim([20.0, 60.0])
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_2016_'+savesubdir+'_'+process_type+'_dailybinned_lt60.png')
+    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+'_dailybinned_lt60.png')
     plt.close(fig)
 
     # HISTOGRAM - S
     # plot all the S in raw form (hist)
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
     ax.hist(S[~np.isnan(S)])
-    plt.suptitle('Lidar Ratio:\n no soot; PM10 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    plt.suptitle('Lidar Ratio:\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Lidar Ratio')
     plt.ylabel('Frequency')
-    plt.savefig(savedir + 'S_2016_'+savesubdir+'_'+process_type+'_histogram_lt60.png')
+    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+'_histogram_lt60.png')
     plt.close(fig)
 
     # TIMESERIES - S - not binned
     # plot all the S in raw form (plot_date)
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
     ax.plot_date(WXT['time'], S, fmt='-')
-    plt.suptitle('Lidar Ratio:\n no soot; PM10 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    plt.suptitle('Lidar Ratio:\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Date [dd/mm]')
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_2016_'+savesubdir+'_'+process_type+'_timeseries_lt60.png')
+    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+'_timeseries_lt60.png')
     plt.close(fig)
 
     # SCATTER - S vs RH (PM1)
     # quick plot 15 min S and RH for 2016.
-    # corr = spearmanr(WXT_t['RH'],S_loaded['S'])
-    # r_str = '%.2f' % corr[0]
-    # fig, ax = plt.subplots(1,1,figsize=(8, 5))
-    # ax.scatter(WXT_t['RH'],S_loaded['S'])
-    # plt.suptitle('Lidar Ratio - r='+r_str+':\n no soot; PM1 masses; equal Number weighting per rbin; ClearfLo winter N(r)')
-    # plt.xlabel('RH')
-    # #ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
-    # plt.ylabel('Lidar Ratio')
-    # plt.savefig(maindir + 'figures/LidarRatio/PM1_noSoot/' + \
-    #             'S_vs_RH_2016_PM1_noSoot_'+process_type+'_scatter_lt60.png')
-    # plt.close(fig)
+    corr = spearmanr(WXT['RH'],S)
+    r_str = '%.2f' % corr[0]
+    fig, ax = plt.subplots(1,1,figsize=(8, 5))
+    ax.scatter(WXT['RH'],S)
+    plt.suptitle('Lidar Ratio - r='+r_str+':\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    plt.xlabel('RH')
+    plt.ylabel('Lidar Ratio')
+    plt.savefig(savedir + 'S_vs_RH_'+year+'_'+savesub+'_'+process_type+'_scatter_lt60.png')
+    plt.close(fig)
 
     # ------------------------------------------------
 
