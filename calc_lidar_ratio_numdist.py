@@ -344,6 +344,35 @@ def merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly):
 
     return mass, WXT
 
+def coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass):
+
+    """
+    Coarsen the PM1 data from 15 mins to hourly data to match PM10 and WXT hourly data
+    :param WXT_hourly:
+    :param PM1_mass:
+    :return: PM1_mass_hourly
+    """
+
+    # time match pm1 to WXT_hourly and pm10 data
+    PM1_mass_hourly = {'time': WXT_hourly['time']}
+
+    for key, data in PM1_mass.iteritems():
+        if key != 'time':
+            PM1_mass_hourly[key] = np.empty(len(PM1_mass_hourly['time']))
+            PM1_mass_hourly[key][:] = np.nan
+
+    for t, time_t in enumerate(PM1_mass_hourly['time']):
+
+        # find where data is within the hour
+        bool = np.logical_and(PM1_mass['time'] >=time_t, PM1_mass['time']<=time_t+dt.timedelta(hours=1))
+
+        for key, data in PM1_mass.iteritems():
+            if key != 'time':
+                PM1_mass_hourly[key][t] = np.nanmean(data[bool])
+
+
+    return PM1_mass_hourly
+
 ## masses and moles
 
 ### main masses and moles script
@@ -1014,22 +1043,48 @@ def main():
         # merge the PM10 data together and used RH to do it. RH and PM10 merged datasets will be temporally in sync.
         PM10_mass, WXT = merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly)
 
+        WXT = WXT_hourly
+
+    if process_type == 'PM10-1':
+
+        # coarsen PM1 data from 15 min to hourly
+        PM1_mass_hourly = coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass)
+
+
 
     # ==============================================================================
     # Process data
     # ==============================================================================
 
-    # if process_type == 'PM1':
+    if process_type == 'PM1':
+        # calculate the moles and the mass [kg kg-1] from mass [g cm-3] and WXT data
+        moles, mass_kg_kg = calculate_moles_masses(PM1_mass, WXT, aer_particles)
 
-    # calculate the moles and the mass [kg kg-1] from mass [g cm-3] and WXT data
-    moles, mass_kg_kg = calculate_moles_masses(mass, WXT, aer_particles)
+        # work out Number concentration (relative weight) for each species
+        # calculate the number of particles for each species using radius_m and the mass
+        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic_m, dN)
 
-    # work out Number concentration (relative weight) for each species
-    # calculate the number of particles for each species using radius_m and the mass
-    N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic_m, dN)
+    elif process_type == 'PM10':
+
+        moles, mass_kg_kg = calculate_moles_masses(PM10_mass, WXT, aer_particles)
+        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic_m, dN)
+
+    elif process_type == 'PM10-1':
+
+        # PM1 first
+        moles, mass_kg_kg = calculate_moles_masses(PM1_mass_hourly, WXT_hourly, aer_particles)
+        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_hourly, r_d_classic_m, dN)
+
+
+        # PM10 second
+        moles, mass_kg_kg = calculate_moles_masses(PM10_mass, WXT, aer_particles)
+        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic_m, dN)
+
+        # PM10 - PM1
+
 
     # calculate dry volume from the mass of each species
-    V_dry_from_mass = calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density)
+    # V_dry_from_mass = calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density)
 
     # ---------------------------------------------------------
     # Swell the particles (r_md,aer_i) [microns]
