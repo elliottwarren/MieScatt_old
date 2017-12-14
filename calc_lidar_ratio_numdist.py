@@ -8,6 +8,7 @@ Taken from calc_lidar_ratio.py on 29 Nov 2017
 import matplotlib.pyplot as plt
 from matplotlib.dates import DateFormatter
 import pickle
+from copy import deepcopy
 
 import numpy as np
 import datetime as dt
@@ -353,22 +354,38 @@ def coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass):
     :return: PM1_mass_hourly
     """
 
+    # variables to process from PM1_mass (ignore time, pm1, pm10 etc)
+    PM1_process_vars = ['CORG', 'CL', 'CBLK', 'NH4', 'SO4', 'NO3']
+
     # time match pm1 to WXT_hourly and pm10 data
     PM1_mass_hourly = {'time': WXT_hourly['time']}
 
-    for key, data in PM1_mass.iteritems():
-        if key != 'time':
-            PM1_mass_hourly[key] = np.empty(len(PM1_mass_hourly['time']))
-            PM1_mass_hourly[key][:] = np.nan
+    for key in PM1_process_vars:
+        PM1_mass_hourly[key] = np.empty(len(PM1_mass_hourly['time']))
+        PM1_mass_hourly[key][:] = np.nan
 
-    for t, time_t in enumerate(PM1_mass_hourly['time']):
+    # define an idx range to time match in, that will 'move' up with each iteration of t, to minimise computation time as
+    #   the 15 min raw array can be very large!
+    start_idx = 0
+    for t, start, end in zip(np.arange(len(PM1_mass_hourly['time'][:-1])), PM1_mass_hourly['time'][:-1], PM1_mass_hourly['time'][1:]):
+
+        # search for matching times only this many idx positions ahead of start_idx
+        end_idx = start_idx + 50
+
+        print t
 
         # find where data is within the hour
-        bool = np.logical_and(PM1_mass['time'] >=time_t, PM1_mass['time']<=time_t+dt.timedelta(hours=1))
+        bool = np.logical_and(PM1_mass['time'][start_idx:end_idx] > start, PM1_mass['time'][start_idx:end_idx] <= end)
+        idx_trim = np.where(bool == True)[0] # idx in the [start_idx:end_idx] bit
+        idx = idx_trim + start_idx # idx in the entire array [:]
 
-        for key, data in PM1_mass.iteritems():
-            if key != 'time':
-                PM1_mass_hourly[key][t] = np.nanmean(data[bool])
+        if idx.size != 0:
+            for key in PM1_process_vars:
+                PM1_mass_hourly[key][t] = np.nanmean(PM1_mass[key][idx])
+
+            # move the start position by the extra few positions passed during this loop.
+            start_idx += idx_trim[-1]
+
 
 
     return PM1_mass_hourly
@@ -376,13 +393,14 @@ def coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass):
 ## masses and moles
 
 ### main masses and moles script
-def calculate_moles_masses(mass, WXT, aer_particles):
+def calculate_moles_masses(mass, WXT, aer_particles, inc_soot=False):
 
     """
-    Calculate the moles and mass [kg kg-1] of the aerosol
+    Calculate the moles and mass [kg kg-1] of the aerosol. Can set soot to on or off (turn all soot to np.nan)
     :param mass: [g cm-3]
     :param WXT:
     :param aer_particles:
+    :param inc_soot: [bool]
     :return: moles, mass_kg_kg
     """
 
@@ -418,8 +436,9 @@ def calculate_moles_masses(mass, WXT, aer_particles):
 
 
     # temporarily make black carbon mass nan
-    print ' SETTING BLACK CARBON MASS TO NAN'
-    mass_kg_kg['CBLK'][:] = np.nan
+    if inc_soot == False:
+        print ' SETTING BLACK CARBON MASS TO NAN'
+        mass_kg_kg['CBLK'][:] = np.nan
 
     return moles, mass_kg_kg
 
@@ -889,7 +908,7 @@ def main():
     # ==============================================================================
 
     # use PM1 or PM10 data?
-    process_type = 'PM10'
+    process_type = 'PM10-1'
 
     # soot or no soot? ('soot' or 'noSoot')
     soot_flag = 'noSoot'
@@ -1017,7 +1036,7 @@ def main():
 
         # make sure there are no time stamp gaps in the data so mass and WXT will match up perfectly, timewise.
         print 'beginning time matching for WXT...'
-        WXT = internal_time_completion(WXT_in, date_range)
+        WXT_15min = internal_time_completion(WXT_in, date_range)
         print 'end time matching for WXT...'
 
         # same but for mass data
@@ -1026,7 +1045,7 @@ def main():
         print 'end time matching for mass...'
 
 
-    elif (process_type == 'PM10') | (process_type == 'PM10-1'):
+    if (process_type == 'PM10') | (process_type == 'PM10-1'):
 
         # Read in the daily EC and OC data [grams m-3]
         OC_BC_in = read_EC_BC_mass_data(massdatadir, year)
@@ -1043,14 +1062,18 @@ def main():
         # merge the PM10 data together and used RH to do it. RH and PM10 merged datasets will be temporally in sync.
         PM10_mass, WXT = merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly)
 
-        WXT = WXT_hourly
+        # WXT = WXT_hourly
 
     if process_type == 'PM10-1':
 
         # coarsen PM1 data from 15 min to hourly
         PM1_mass_hourly = coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass)
 
-
+        # create pm10-1 mass
+        PM10m1_mass_hourly = {'time': PM1_mass_hourly['time']}
+        for key in PM1_mass_hourly.iterkeys():
+            if key != 'time':
+                PM10m1_mass_hourly[key] = PM10_mass[key] - PM1_mass_hourly[key]
 
     # ==============================================================================
     # Process data
@@ -1071,17 +1094,24 @@ def main():
 
     elif process_type == 'PM10-1':
 
+
+
         # PM1 first
-        moles, mass_kg_kg = calculate_moles_masses(PM1_mass_hourly, WXT_hourly, aer_particles)
-        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_hourly, r_d_classic_m, dN)
+        moles, pm1_mass_kg_kg = calculate_moles_masses(PM1_mass_hourly, WXT_hourly, aer_particles)
+        N_weight_pm1, num_conc_pm1 = est_num_conc_by_species_for_Ndist(aer_particles, pm1_mass_kg_kg, aer_density, WXT_hourly, r_d_classic_m, dN)
 
 
-        # PM10 second
-        moles, mass_kg_kg = calculate_moles_masses(PM10_mass, WXT, aer_particles)
-        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic_m, dN)
+        # PM10-1 second
+        moles, pm10m1_mass_kg_kg = calculate_moles_masses(PM10_mass, WXT_hourly, aer_particles)
+        N_weight_pm10, num_conc_pm10m1 = est_num_conc_by_species_for_Ndist(aer_particles, pm10m1_mass_kg_kg, aer_density, WXT_hourly, r_d_classic_m, dN)
 
-        # PM10 - PM1
+        # PM10 - PM1 (use the right parts of the num concentration for the rbins e.g. pm1 mass for r<1, pm10-1 for r>1)
+        idx_pm1 = np.where(dN['D'] <= 1000.0)[0] # 'D' is in nm not microns!
+        idx_pm10m1 = np.where(dN['D'] > 1000.0)[0]
 
+        num_conc = {}
+        for aer_i in num_conc_pm1.iterkeys():
+            num_conc[aer_i] = np.hstack((num_conc_pm1[aer_i][:, idx_pm1], num_conc_pm10m1[aer_i][:, idx_pm10m1]))
 
     # calculate dry volume from the mass of each species
     # V_dry_from_mass = calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density)
@@ -1172,11 +1202,19 @@ def main():
     # pickle save
     if picklesave == True:
 
-        if (process_type == 'PM1') | (process_type == 'PM10'):
-            pickle_save = {'time': WXT['time'], 'optics': optics, 'WXT':WXT,
-                           'num_conc':num_conc, 'mass': mass, 'dN':dN, 'r_md':r_md}
-            with open(datadir + 'pickle/allvars_'+savesub+'_'+year+'.pickle', 'wb') as handle:
-                pickle.dump(pickle_save, handle)
+        if process_type == 'PM1':
+                WXT = WXT_15min
+        elif process_type == 'PM10':
+                WXT = WXT_hourly
+        elif process_type == 'PM10-1':
+                mass_kg_kg = {'PM1': pm10m1_mass_kg_kg, 'PM10-1': pm10m1_mass_kg_kg}
+                WXT = WXT_hourly
+
+
+        pickle_save = {'time': WXT['time'], 'optics': optics, 'WXT':WXT,
+                       'num_conc':num_conc, 'mass_kg_kg': mass_kg_kg, 'dN':dN, 'r_md':r_md}
+        with open(datadir + 'pickle/allvars_'+savesub+'_'+year+'.pickle', 'wb') as handle:
+            pickle.dump(pickle_save, handle)
 
     # get mean and nanstd from data
     # set up the date range to fill (e.g. want daily statistics then stats_date_range = daily resolution)
