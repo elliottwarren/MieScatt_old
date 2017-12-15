@@ -371,9 +371,8 @@ def merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly):
 
     # set mass and WXT data as the hourly data values
     mass = PM10_mass_all
-    WXT = WXT_hourly
 
-    return mass, WXT
+    return mass
 
 def coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass):
 
@@ -636,6 +635,7 @@ def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WX
     for aer_i in aer_particles:
 
         # relative weighting of N for each species (aerosol_i / sum of all aerosol for each time)
+        # .shape(time,) - N_weight['CORG'] has many over 1
         N_weight[aer_i] = num_part[aer_i] / np.nansum(np.array(num_part.values()), axis=0)
 
         # estimated number for the species, from the main distribution data, using the weighting,
@@ -904,9 +904,11 @@ def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet
                         Q_ext[aer_i][t, r] = particle.qext()
                         Q_back[aer_i][t, r] = particle.qb() / (4.0 * np.pi)
 
+
                         # calculate extinction cross section
                         C_ext[aer_i][t, r] = Q_ext[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
                         C_back[aer_i][t, r] = Q_back[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
+
 
                 sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
                 sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
@@ -921,6 +923,106 @@ def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet
 
     return optics
 
+def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet, num_conc):
+
+    """
+    Calculate the lidar ratio and store all optic calculations in a single dictionary for export and pickle saving
+    :param aer_particles:
+    :param date_range:
+    :param ceil_lambda:
+    :param r_md_m:
+    :param n_wet:
+    :param num_conc:
+    :return: optics [dict]
+    """
+
+    # Calculate Q_dry for each bin and species.
+    #   The whole averaging thing up to cross sections comes later (Geisinger et al., 2016)
+
+    # Create size parameters
+    X = {}
+    for aer_i in aer_particles:
+        X[aer_i] = (2.0 * np.pi * r_md_m[aer_i])/ceil_lambda[0]
+
+    # create Q_ext and Q_back arrays ready
+    Q_ext = {}
+    Q_back = {}
+
+    C_ext = {}
+    C_back = {}
+
+    sigma_ext = {}
+    sigma_back = {}
+
+    print ''
+    print 'Calculating extinction and backscatter efficiencies...'
+
+    # 1) for aer_i in aerosols
+    for aer_i in aer_particles:
+
+        # if the aerosol has a number concentration above 0 (therefore sigma_aer_i > 0)
+        if np.nansum(num_conc[aer_i]) != 0.0:
+
+            # status tracking
+            print '  ' + aer_i
+
+            Q_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
+            Q_ext[aer_i][:] = np.nan
+
+            Q_back[aer_i] = np.empty(r_md_m[aer_i].shape)
+            Q_back[aer_i][:] = np.nan
+
+            C_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
+            C_ext[aer_i][:] = np.nan
+
+            C_back[aer_i] = np.empty(r_md_m[aer_i].shape)
+            C_back[aer_i][:] = np.nan
+
+            sigma_ext[aer_i] = np.empty(len(date_range))
+            sigma_ext[aer_i][:] = np.nan
+
+            sigma_back[aer_i] = np.empty(len(date_range))
+            sigma_back[aer_i][:] = np.nan
+
+            # 2) for time, t
+            for t, time_t in enumerate(date_range):
+
+                # status tracking
+                if t in np.arange(0, 35000, 1000):
+                    print '     ' + str(t)
+
+                # 3) for radii bin, r
+                for r, r_md_t_r in enumerate(r_md_m[aer_i][t, :]):
+
+                    X_t_r = X[aer_i][t, r]  # size parameter_t (for all sizes at time t)
+                    n_wet_t_r = n_wet[aer_i][t, r]  # complex index of refraction t (for all sizes at time t)
+
+
+                    if np.logical_and(~np.isnan(X_t_r), ~np.isnan(n_wet_t_r)):
+
+                        # Q_back / 4.0pi as normal .qb() is a hemispherical backscatter, and we want specifically 180 deg.
+                        particle = Mie(x=X_t_r, m=n_wet_t_r)
+                        Q_ext[aer_i][t, r] = particle.qext()
+                        Q_back[aer_i][t, r] = particle.qb() / (4.0 * np.pi)
+
+
+                        # calculate extinction cross section
+                        C_ext[aer_i][t, r] = Q_ext[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
+                        C_back[aer_i][t, r] = Q_back[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
+
+
+                sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
+                sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
+
+    sigma_ext_tot = np.nansum(sigma_ext.values(), axis=0)
+    sigma_back_tot = np.nansum(sigma_back.values(), axis=0)
+    S = sigma_ext_tot / sigma_back_tot
+
+    # store all variables in a dictionary
+    optics = {'S': S, 'Q_ext':Q_ext, 'Q_back':Q_back, 'C_ext': C_ext, 'C_back': C_back,
+              'sigma_ext': sigma_ext, 'sigma_back': sigma_back}
+
+    return optics
 
 def main():
 
@@ -942,6 +1044,9 @@ def main():
 
     # soot or no soot? ('soot' or 'noSoot')
     soot_flag = 'noSoot'
+
+    # Geisinger et al., 2017 subsampling?
+    Geisinger_subsample_flag = 1
 
     # string for saving figures and choosing subdirectories
     savesub = process_type+'_'+soot_flag
@@ -1014,7 +1119,7 @@ def main():
     # turn units to meters and place an entery for each aerosol
     pm1t10_rv_m = {}
     for key in r_d_classic_m.iterkeys():
-        pm1t10_rv_m[key] = pm1t10_rv_microns / 1.0e-6
+        pm1t10_rv_m[key] = pm1t10_rv_microns * 1.0e-6
 
     # ==============================================================================
     # Read data
@@ -1047,16 +1152,29 @@ def main():
     with open(filename, 'rb') as handle:
         dN = pickle.load(handle)
 
-    # convert D and dD from nm to microns and meters separately, and keep the variables for clarity further down
-    r_d_orig_bins_microns = dN['D'] * 1e-03 / 2.0
-    r_d_orig_bins_m = dN['D'] * 1e-09 / 2.0
-
     # make a median distribution of dN
     dN['med'] = np.nanmedian(dN['binned'], axis=0)
 
-    # interpolated r values to swell for the Geisinger et al 2017 approach
+    # convert D and dD from nm to microns and meters separately, and keep the variables for clarity further down
+    # these are the original bins from the dN data
+    r_d_orig_bins_microns = dN['D'] * 1e-03 / 2.0
+    r_d_orig_bins_m = dN['D'] * 1e-09 / 2.0
+
+
+    # interpolated r values to from the Geisinger et al 2017 approach
+    # will increase the number of r bins to (number of r bins * n_samples)
     R_dg_microns = Geisinger_increase_r_bins(dN, r_d_orig_bins_microns, n_samples=4.0)
-    R_dg_m = R_dg_microns * 1e-06
+    R_dg_m = R_dg_microns * 1.0e-06
+
+    # which set of radius is going to be swollen?
+    if Geisinger_subsample_flag == 1:
+        r_d_microns = R_dg_microns
+        r_d_m = R_dg_m
+    else:
+        r_d_microns = r_d_orig_bins_microns
+        r_d_m = r_d_orig_bins_m
+
+    # ---- pasted up to here ---- #
 
     # Read in species by mass data
     if (process_type == 'PM1') | (process_type == 'PM10-1'):
@@ -1082,6 +1200,7 @@ def main():
         PM1_mass = internal_time_completion(PM1_mass_in, date_range)
         print 'end time matching for mass...'
 
+        WXT = WXT_15min
 
     if (process_type == 'PM10') | (process_type == 'PM10-1'):
 
@@ -1097,10 +1216,10 @@ def main():
         # average WXT data up to hourly
         WXT_hourly = WXT_hourly_average(WXT_in)
 
-        # merge the PM10 data together and used RH to do it. RH and PM10 merged datasets will be temporally in sync.
-        PM10_mass, WXT = merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly)
+        # merge the PM10 data together and used RH to do it. RH and PM10 merged datasets will be in sync.
+        PM10_mass = merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly)
 
-        # WXT = WXT_hourly
+        WXT = WXT_hourly
 
     if process_type == 'PM10-1':
 
@@ -1113,25 +1232,29 @@ def main():
             if key != 'time':
                 PM10m1_mass_hourly[key] = PM10_mass[key] - PM1_mass_hourly[key]
 
+                # PM10 - PM1 is not always >0, as the two instruments are different.
+                #   Therefore np.nan all negative masses!
+                idx = np.where(PM10m1_mass_hourly[key] < 0)
+                PM10m1_mass_hourly[key][idx] = np.nan
+
     # ==============================================================================
     # Process data
     # ==============================================================================
 
     if process_type == 'PM1':
         # calculate the moles and the mass [kg kg-1] from mass [g cm-3] and WXT data
-        moles, mass_kg_kg = calculate_moles_masses(PM1_mass, WXT, aer_particles)
+        moles, mass_kg_kg = calculate_moles_masses(PM1_mass, WXT_15min, aer_particles)
 
         # work out Number concentration (relative weight) for each species
         # calculate the number of particles for each species using radius_m and the mass
-        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic_m, dN)
+        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_15min, r_d_classic_m, dN)
 
     elif process_type == 'PM10':
 
-        moles, mass_kg_kg = calculate_moles_masses(PM10_mass, WXT, aer_particles)
-        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, r_d_classic_m, dN)
+        moles, mass_kg_kg = calculate_moles_masses(PM10_mass, WXT_hourly, aer_particles)
+        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_hourly, r_d_classic_m, dN)
 
     elif process_type == 'PM10-1':
-
 
 
         # PM1 first
@@ -1206,36 +1329,17 @@ def main():
     n_wet = {}
 
     for aer_i in aer_particles: # aer_particles:
+    for aer_i in aer_particles: # aer_particles:
 
         # physical growth factor
         n_wet[aer_i] = (n_species[aer_i] / (GF[aer_i] ** 3.0)) + (n_species['H2O'] * (1 - (1/(GF[aer_i] ** 3.0))))
 
-
-    # --------------------------------------------------------------
-
-
-    # # calculate n_mixed using volume mixing method
-    # # volume mixing for CIR (eq. 12, Liu and Daum 2008)
-    #
-    # n_mixed = np.array([V_rel[i] * n_species[i] for i in V_rel.iterkeys()])
-    # n_mixed = np.sum(n_mixed, axis=0)
-    #
-    #
-    # # calculate volume mean radii from r_md,aer_i (weighted by V_rel,wet,aer_i)
-    # r_md_avg = np.array([V_rel_aer_only[aer_i] * r_md[aer_i] for aer_i in aer_particles])
-    # r_md_avg = np.nansum(r_md_avg, axis=0)
-    # r_md_avg[r_md_avg == 0.0] = np.nan
-    #
-    # # convert from microns to m
-    # r_md_avg_m = r_md_avg * 1e-6
-    #
-    # # calculate the size parameter for the average aerosol size
-    # x_wet_mixed = (2.0 * np.pi * r_md_avg_m)/ceil_lambda[0]
-
     # --------------------------
 
-    # The main beast. Calculate all the optical properties, and outputs the lidar ratio
-    optics = calculate_lidar_ratio(aer_particles, WXT['time'], ceil_lambda, r_md_m,  n_wet, num_conc)
+    if Geisinger_subsample_flag == 0:
+        # The main beast. Calculate all the optical properties, and outputs the lidar ratio
+        optics = calculate_lidar_ratio(aer_particles, WXT['time'], ceil_lambda, r_md_m,  n_wet, num_conc)
+
 
     # extract out the lidar ratio
     S = optics['S']
@@ -1331,113 +1435,125 @@ def main():
 
     # ------------------------------------------------
 
-    # # probably overkill...
-    # # Use Geisinger et al., (2016) (section 2.2.4) approach to calculate cross section
-    # #   because the the ext and backscatter components are really sensitive to variation in r (and as rbins are defined
-    # #   somewhat arbitrarily...
-    #
-    #
-    # # total number of subsamples for each bin (self defined)
-    # n_samples = 4.0
-    #
-    # # all upper and lower bins
-    # R_db = (dN['D'] + (0.5 * dN['dD'])) / 2.0 # upper
-    # R_da = (dN['D'] - (0.5 * dN['dD'])) / 2.0 # lower
-    #
-    #
-    #     # create Q_ext and Q_back arrays ready
-    # Q_ext = {}
-    # Q_back = {}
-    #
-    # C_ext = {}
-    # C_back = {}
-    #
-    # sigma_ext = {}
-    # sigma_back = {}
-    #
-    # print ''
-    # print 'Calculating extinction and backscatter efficiencies...'
-    #
-    #
-    #
-    # for aer_i in aer_particles:
-    #
-    #      # if the aerosol has a number concentration above 0 (therefore sigma_aer_i > 0)
-    #     if np.nansum(num_conc[aer_i]) != 0.0:
-    #
-    #         # status tracking
-    #         print '  ' + aer_i
-    #
-    #         Q_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
-    #         Q_ext[aer_i][:] = np.nan
-    #
-    #         Q_back[aer_i] = np.empty(r_md_m[aer_i].shape)
-    #         Q_back[aer_i][:] = np.nan
-    #
-    #         C_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
-    #         C_ext[aer_i][:] = np.nan
-    #
-    #         C_back[aer_i] = np.empty(r_md_m[aer_i].shape)
-    #         C_back[aer_i][:] = np.nan
-    #
-    #         sigma_ext[aer_i] = np.empty(len(date_range))
-    #         sigma_ext[aer_i][:] = np.nan
-    #
-    #         sigma_back[aer_i] = np.empty(len(date_range))
-    #         sigma_back[aer_i][:] = np.nan
-    #
-    #         # for each bin range
-    #         for r, R_db_i, R_da_i in zip(np.arange(len(R_db)), R_db, R_da):
-    #
-    #             # set up the extinction and backscatter cross sections for this bin range
-    #             C_ext_sample = np.empty(int(n_samples))
-    #             C_back_sample = np.empty(int(n_samples))
-    #
-    #             # iterate over each subsample (g) to get R_dg for the bin, and calc the cross section
-    #             # g_idx will place it it the right spot in C_back
-    #             for g_idx, g in enumerate(np.arange(1,n_samples+1)):
-    #
-    #                 # calculate R_dg (subsample r)
-    #                 #   Eqn 18
-    #                 R_dg = (g * ((R_db_i - R_da_i)/n_samples)) + R_da_i
-    #
-    #                 # calc Q_ext(R_dg, n_wet,R_dg)
-    #                 # calc_Q_back(R_dg, n_wet,R_dg)
-    #                 # would need to swell wider range of particles (93 bins * subsamples)
-    #                 #particle = Mie(x=X_t_r, m=n_wet_t_r)
-    #                 #Q_ext[aer_i][t, r] = particle.qext()
-    #                 #Q_back[aer_i][t, r] = particle.qb() / (4.0 * np.pi)
-    #
-    #                 # calculate the extinction and backscatter cross section for the subsample
-    #                 #   part of Eqn 16 and 17
-    #                 C_ext_sample[g_idx] = Q_ext[t, r] * np.pi * (R_dg ** 2.0)
-    #                 C_back_sample[g_idx] = Q_back[t, r] * np.pi * (R_dg ** 2.0)
-    #
-    #
-    #             # once C_back/ext for all subsamples g, have been calculated, Take the average
-    #             #   Eqn 17
-    #             C_ext[aer_i][t, r] = (1.0 / n_samples) * np.nansum(C_ext)
-    #             C_back[aer_i][t, r] = (1.0 / n_samples) * np.nansum(C_back)
-    #
-    #
-    #         sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
-    #         sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
-    #
-    #     # sigma_ext_tot[t] = sum(all sigma_ext_aer_i)
-    #     # sigma_back_tot[t] = sum(all sigma_back_aer_i)
-    #     # S[t] = sigma_ext_tot[t] / sigma_back_tot[t]
-    #
-    #                     # Q_back / 4.0pi as normal .qb() is a hemispherical backscatter, and we want specifically 180 deg.
-    #                     particle = Mie(x=X_t_r, m=n_wet_t_r)
-    #                     Q_ext[aer_i][t, r] = particle.qext()
-    #                     Q_back[aer_i][t, r] = particle.qb() / (4.0 * np.pi)
-    #
-    #                     # calculate extinction cross section
-    #                     C_ext[aer_i][t, r] = Q_ext[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
-    #                     C_back[aer_i][t, r] = Q_back[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
-    #
-    #             sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
-    #             sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
+    # probably overkill...
+    # Use Geisinger et al., (2016) (section 2.2.4) approach to calculate cross section
+    #   because the the ext and backscatter components are really sensitive to variation in r (and as rbins are defined
+    #   somewhat arbitrarily...
+
+
+    # total number of subsamples for each bin (self defined)
+    n_samples = 4.0
+
+    # all upper and lower bins
+    R_db = (dN['D'] + (0.5 * dN['dD'])) / 2.0 # upper
+    R_da = (dN['D'] - (0.5 * dN['dD'])) / 2.0 # lower
+
+
+        # create Q_ext and Q_back arrays ready
+    Q_ext = {}
+    Q_back = {}
+
+    C_ext = {}
+    C_back = {}
+
+    sigma_ext = {}
+    sigma_back = {}
+
+    print ''
+    print 'Calculating extinction and backscatter efficiencies...'
+
+    # Create size parameters
+    X = {}
+    for aer_i in aer_particles:
+        X[aer_i] = (2.0 * np.pi * r_md_m[aer_i])/ceil_lambda[0]
+
+    for aer_i in aer_particles:
+
+         # if the aerosol has a number concentration above 0 (therefore sigma_aer_i > 0)
+        if np.nansum(num_conc[aer_i]) != 0.0:
+
+            # status tracking
+            print '  ' + aer_i
+
+            Q_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
+            Q_ext[aer_i][:] = np.nan
+
+            Q_back[aer_i] = np.empty(r_md_m[aer_i].shape)
+            Q_back[aer_i][:] = np.nan
+
+            C_ext[aer_i] = np.empty(r_md_m[aer_i].shape)
+            C_ext[aer_i][:] = np.nan
+
+            C_back[aer_i] = np.empty(r_md_m[aer_i].shape)
+            C_back[aer_i][:] = np.nan
+
+            sigma_ext[aer_i] = np.empty(len(date_range))
+            sigma_ext[aer_i][:] = np.nan
+
+            sigma_back[aer_i] = np.empty(len(date_range))
+            sigma_back[aer_i][:] = np.nan
+
+            # for each r bin
+            for r_bin_idx, r_i in enumerate(r_d_orig_bins_m):
+
+                # set up the extinction and backscatter cross sections for this bin range
+                C_ext_sample = np.empty(int(n_samples))
+                C_back_sample = np.empty(int(n_samples))
+
+                # get the R_dg for this range (pre-calculated as each of these needed to be swollen ahead of time)
+                idx_s = r_bin_idx*int(n_samples)
+                idx_e = (r_bin_idx*int(n_samples)) + (n_samples - 1)
+
+                # get the idx range for R_dg to match
+                idx_range = range(idx_s, idx_e + 1)
+
+                R_dg_i_set = R_dg_m[idx_s:idx_e]
+
+                # iterate over each subsample (g) to get R_dg for the bin, and calc the cross section
+                # g_idx will place it it the right spot in C_back
+                for R_dg_idx, R_dg_i in zip(R_dg_i_set):
+
+                    # size parameter
+                    X_t_r = X[aer_i][t, R_dg_idx]
+
+                    # complex index of refraction
+                    n_wet_t_r = n_wet[aer_i][t, R_dg_idx]
+
+                    # would need to swell wider range of particles (93 bins * subsamples)
+                    particle = Mie(x=X_t_r, m=n_wet_t_r)
+                    Q_ext[aer_i][t, R_dg_idx] = particle.qext()
+                    Q_back[aer_i][t, R_dg_idx] = particle.qb() / (4.0 * np.pi)
+
+                    # calculate the extinction and backscatter cross section for the subsample
+                    #   part of Eqn 16 and 17
+                    C_ext_sample[g_idx] = Q_ext[t, r] * np.pi * (R_dg ** 2.0)
+                    C_back_sample[g_idx] = Q_back[t, r] * np.pi * (R_dg ** 2.0)
+
+
+                # once C_back/ext for all subsamples g, have been calculated, Take the average
+                #   Eqn 17
+                C_ext[aer_i][t, r] = (1.0 / n_samples) * np.nansum(C_ext)
+                C_back[aer_i][t, r] = (1.0 / n_samples) * np.nansum(C_back)
+
+
+            sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
+            sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
+
+        # sigma_ext_tot[t] = sum(all sigma_ext_aer_i)
+        # sigma_back_tot[t] = sum(all sigma_back_aer_i)
+        # S[t] = sigma_ext_tot[t] / sigma_back_tot[t]
+
+                        # Q_back / 4.0pi as normal .qb() is a hemispherical backscatter, and we want specifically 180 deg.
+                        particle = Mie(x=X_t_r, m=n_wet_t_r)
+                        Q_ext[aer_i][t, r] = particle.qext()
+                        Q_back[aer_i][t, r] = particle.qb() / (4.0 * np.pi)
+
+                        # calculate extinction cross section
+                        C_ext[aer_i][t, r] = Q_ext[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
+                        C_back[aer_i][t, r] = Q_back[aer_i][t, r] * np.pi * (r_md_t_r ** 2.0)
+
+                sigma_ext[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_ext[aer_i][t, :])
+                sigma_back[aer_i][t] = np.nansum(num_conc[aer_i][t, :] * C_back[aer_i][t, :])
 
     # plt.plot(S)
 
