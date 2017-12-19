@@ -167,12 +167,13 @@ def netCDF_read(datapaths,vars=''):
     # make 'time' the processed time
     if 'time' in raw:
         raw['rawtime'] = deepcopy(raw['time'])
+        raw['time'] = np.array(deepcopy(raw['protime']))
+        del raw['protime']
     elif 'forecast_time' in raw:
         raw['rawtime'] = deepcopy(raw['forecast_time'])
+        raw['time'] = np.array(deepcopy(raw['protime']))
+        del raw['protime']
 
-    raw['time'] = np.array(deepcopy(raw['protime']))
-
-    del raw['protime']
 
     # close file
     datafile.close()
@@ -334,6 +335,42 @@ def linear_interpolation(y):
 
 # statistics
 
+def simple_statistics(data, time, stats_date_range, *args):
+
+
+    """
+    Create simple statistics by binning the time and then carrying out functions on the data, listed in *args
+
+    :param data: data to apply functions to
+    :param time: original time data (minute observations)
+    :param stats_date_range: time to average into (e.g. list of daily datetimes)
+    :param args: the functions to use e.g. np.nanmean (without the brackets!)
+    :return: stats [dictionary]
+    """
+
+    # create statistics dictionary
+    stats = {}
+
+
+    # set up array ready in dictionary
+    # func_name should work with numpy and scipy statistics (tested on np.mean and scipy.stats.spearmanr)
+    for arg_v in args:
+        stats[arg_v.func_name] = np.empty(len(stats_date_range))
+        stats[arg_v.func_name][:] = np.nan
+
+    for t, start, end in zip(np.arange(len(stats_date_range[:-1])), stats_date_range[:-1], stats_date_range[1:]):
+
+        # get location of time period's data
+        bool = np.logical_and(time >=start, time<=end)
+
+        # extract data
+        subsample = data[bool]
+
+        for arg_v in args:
+            stats[arg_v.func_name][t] = arg_v(subsample)
+
+    return stats
+
 def croscorr(data1, data2, normalise=False):
     """
     #==============================================================================
@@ -491,6 +528,7 @@ def dateList_to_datetime(dayList):
 
     return datetimeDays
 
+# 5 *
 def date_range(start_date, end_date, increment, period):
 
     """
@@ -507,6 +545,7 @@ def date_range(start_date, end_date, increment, period):
     """
 
     from dateutil.relativedelta import relativedelta
+    from numpy import array
 
     result = []
     nxt = start_date
