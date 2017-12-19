@@ -117,4 +117,71 @@ plt.show()
 
 # ---------------------------------------------------------
 
+# # simple plot of S
+# fig, ax = plt.subplots(1,1, figsize=(6,6))
+# plt.plot_date(date_range, S)
+# plt.savefig(savedir + 'quickplot.png')
+# plt.close(fig)
+#
+# --------------------------
 
+# # Testing lidar ratio computation
+#
+# # read in Franco's computation of the lidar ratio CIR=1.47 + 0.099i, lambda=905nm
+# lr_f = eu.netCDF_read('/home/nerc/Documents/MieScatt/testing/lr_1.47_0.099_0.905.nc',['DIAMETER','LIDAR_RATIO'])
+#
+# step = 0.005
+# r_range_um = np.arange(0.000 + step, 10.000 + step, step)
+# r_range_m = r_range_um * 1.0e-06
+# x_range = (2.0 * np.pi * r_range_m)/ceil_lambda[0]
+#
+#
+# # calculate Q_back and Q_ext from the avergae r_md and n_mixed
+# #S_r = lidar ratio
+# S_r = np.empty(len(r_range_m))
+# S_r[:] = np.nan
+# for r_idx, r_i in enumerate(r_range_m):
+#
+#     x_i = x_range[r_idx]  # size parameter_i
+#     n_i = complex(1.47 + 0.0j)  # fixed complex index of refraction i
+#     # n_i = complex(1.47 + 0.099j)  # fixed complex index of refraction i for soot
+#
+#     # print loop progress
+#     if r_idx in np.arange(0, 2100, 100):
+#         print r_idx
+#
+#
+#     particle = Mie(x=x_i, m=n_i)
+#     Q_ext = particle.qext()
+#     Q_back = particle.qb()
+#     Q_back_alt = Q_back / (4.0 * np.pi)
+#
+#     # #Q_back = particle.qb()
+#     # S12 = particle.S12(-1)
+#     # S11 = S12[0].imag
+#     # S22 = S12[1].imag
+#     # Q_back_fancy = ((np.abs(S11)**2) + (np.abs(S22)**2))/(2 * np.pi * (x_i**2))
+#
+#
+#     # calculate the lidar ratio
+#     # S_t = Q_ext / Q_back
+#     S_r[r_idx] = Q_ext / Q_back_alt
+#
+#
+# # simple plot of S
+# fig, ax = plt.subplots(1,1, figsize=(8,7))
+# plt.loglog(r_range_um * 2, S_r, label='mine') # diameter [microns]
+# plt.loglog(lr_f['DIAMETER'], lr_f['LIDAR_RATIO'],label='Franco''s')
+#
+# for aer_i, r_md_m_aer_i in r_md_m.iteritems():
+#     for r_i in r_md_m_aer_i:
+#         plt.vlines(r_i, 1 ,1e6, linestyle='--', alpha=0.5)
+#
+# plt.xlim([0.01, 100.0])
+# plt.ylim([1.0, 10.0e7])
+# plt.ylabel('Lidar Ratio')
+# plt.xlabel('Diameter [microns]')
+# plt.legend()
+# plt.tight_layout()
+# plt.savefig(maindir + 'figures/LidarRatio/' + 'quickplot_S_vs_r_with_rbin_lines.png')
+# plt.close(fig)
