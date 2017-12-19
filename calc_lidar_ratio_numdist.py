@@ -47,6 +47,7 @@ def read_PM1_mass_data(massdatadir, year):
     Raw data is micrograms m-3 but converted to and outputed as grams m-3
     :param year:
     :return: mass
+    :return qaqc_idx_unique: unique index list where any of the main species observations are missing
     """
 
     massfname = 'PM_North_Kensington_'+year+'.csv'
@@ -65,21 +66,36 @@ def read_PM1_mass_data(massdatadir, year):
         split = header_site.split('@')
         header = split[0]
 
-        # turn '' into nans
-        # convert from micrograms to grams
-        mass[header] = np.array([np.nan if i[h+1] == '' else i[h+1] for i in massrawData[1:]], dtype=float) * 1e-06
+        if header == 'CL': # (what will be salt)
+            # turn '' into 0.0, as missing values can be when there simply wasn't any salt recorded,
+            # convert from micrograms to grams
+            mass[header] = np.array([0.0 if i[h+1] == '' else i[h+1] for i in massrawData[1:]], dtype=float) * 1e-06
+
+        else: # if not CL
+            # turn '' into nans
+            # convert from micrograms to grams
+            mass[header] = np.array([np.nan if i[h+1] == '' else i[h+1] for i in massrawData[1:]], dtype=float) * 1e-06
 
 
     # QAQC - turn all negative values in each column into nans if one of them is negative
+    qaqc_idx = {}
     for header_i in headers:
-        idx = np.where(mass[header_i] < 0.0)
-        mass[header_i][idx] = np.nan
+        bools = np.logical_or(mass[header_i] < 0.0, np.isnan(mass[header_i]))
 
-        # # turn all values in the row negative
-        # for header_j in headers:
-        #     mass[header_j][idx] = np.nan
+        # store bool if it is one of the major pm consituents, so OM10 and OC/BC PM10 data can be removed too
+        if header_i in ['NH4', 'NO3', 'SO4', 'CORG', 'CL', 'CBLK']:
+            qaqc_idx[header_i] = np.where(bools == True)[0]
 
-    return mass
+
+        # turn all values in the row negative
+        for header_j in headers:
+            mass[header_j][bools] = np.nan
+
+    # find unique instances of missing data
+    qaqc_idx_unique = np.unique(np.hstack(qaqc_idx.values()))
+
+
+    return mass, qaqc_idx_unique
 
 def read_EC_BC_mass_data(massdatadir, year):
 
@@ -248,12 +264,15 @@ def Geisinger_increase_r_bins(dN, r_d_orig_bins_microns, n_samples=4.0):
     R_da = (dN['D'] - (0.5 * dN['dD'])) / 2.0 # lower
 
     # create the radii values in between the edges (evenly spaced within each bin)
-    R_dg_microns = np.array([(g * ((R_db[i] - R_da[i])/n_samples)) + R_da[i]
+    R_dg = np.array([(g * ((R_db[i] - R_da[i])/n_samples)) + R_da[i]
                      for i in range(len(r_d_orig_bins_microns))
-                     for g in range(0,4)])
+                     for g in range(1,int(n_samples)+1)])
 
     # append the last upper edge, as the calculation misses that one off
-    R_dg_microns = np.append(R_dg_microns, R_db[-1])
+    # R_dg = np.append(R_dg, R_db[-1])
+
+    # convert to microns from nanometers
+    R_dg_microns = R_dg * 1e-3
 
     return R_dg_microns
 
@@ -636,7 +655,9 @@ def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WX
 
         # relative weighting of N for each species (aerosol_i / sum of all aerosol for each time)
         # .shape(time,) - N_weight['CORG'] has many over 1
-        N_weight[aer_i] = num_part[aer_i] / np.nansum(np.array(num_part.values()), axis=0)
+        # was nansum but changed to just sum, so times with missing data are nan for all aerosols
+        #   only nans this data set thougha nd not the other data (e.g. pm10 and therefore misses pm1)
+        N_weight[aer_i] = num_part[aer_i] / np.sum(np.array(num_part.values()), axis=0)
 
         # estimated number for the species, from the main distribution data, using the weighting,
         #    for each time step
@@ -946,7 +967,7 @@ def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md
     #   somewhat arbitrarily...
 
 
-        # create Q_ext and Q_back arrays ready
+    # create Q_ext and Q_back arrays ready
     Q_ext = {}
     Q_back = {}
 
@@ -972,16 +993,16 @@ def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md
             # status tracking
             print '  ' + aer_i
 
-            Q_ext[aer_i] = np.empty(r_d_orig_bins_m[aer_i].shape)
+            Q_ext[aer_i] = np.empty((len(date_range), len(r_d_orig_bins_m)))
             Q_ext[aer_i][:] = np.nan
 
-            Q_back[aer_i] = np.empty(r_d_orig_bins_m[aer_i].shape)
+            Q_back[aer_i] = np.empty((len(date_range), len(r_d_orig_bins_m)))
             Q_back[aer_i][:] = np.nan
 
-            C_ext[aer_i] = np.empty(r_d_orig_bins_m[aer_i].shape)
+            C_ext[aer_i] = np.empty((len(date_range), len(r_d_orig_bins_m)))
             C_ext[aer_i][:] = np.nan
 
-            C_back[aer_i] = np.empty(r_d_orig_bins_m[aer_i].shape)
+            C_back[aer_i] = np.empty((len(date_range), len(r_d_orig_bins_m)))
             C_back[aer_i][:] = np.nan
 
             sigma_ext[aer_i] = np.empty(len(date_range))
@@ -992,52 +1013,66 @@ def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md
 
             # 2) for time, t
             for t, time_t in enumerate(date_range):
+            # for t, time_t in zip([135], [WXT_hourly['time'][135]]):
 
                 # status tracking
-                if t in np.arange(0, 35000, 1000):
+                if t in np.arange(0, 35000, 100):
                     print '     ' + str(t)
 
                 # for each r bin
                 for r_bin_idx, r_i in enumerate(r_d_orig_bins_m):
+
+                    # set up the extinction and backscatter efficiencies for this bin range
+                    Q_ext_sample = np.empty(int(n_samples))
+                    Q_back_sample = np.empty(int(n_samples))
 
                     # set up the extinction and backscatter cross sections for this bin range
                     C_ext_sample = np.empty(int(n_samples))
                     C_back_sample = np.empty(int(n_samples))
 
                     # get the R_dg for this range (pre-calculated as each of these needed to be swollen ahead of time)
+                    # should increase in groups e.g. if n_samples = 3, [0-2 then 3-5, 6-8 etc...]
                     idx_s = r_bin_idx*int(n_samples)
-                    idx_e = (r_bin_idx*int(n_samples)) + (n_samples - 1)
+                    idx_e = int((r_bin_idx*int(n_samples)) + (n_samples - 1))
 
                     # get the idx range for R_dg to match its location in the large R_dg array
+                    # +1 to be inclusive of the last entry e.g. if n_samples = 2, idx_range = 0-2 inclusively
                     idx_range = range(idx_s, idx_e + 1)
 
                     # get relative idx range for C_ext_sample to be filled (should always be 0 to length of sample)
-                    g_idx_range = range(n_samples)
+                    g_idx_range = range(int(n_samples))
 
                     # get swollen R_dg for this set
                     # R_dg_i_set = R_dg_m[idx_s:idx_e]
-                    R_dg_wet_i_set = r_md_m[aer_i][idx_s:idx_e]
+                    R_dg_wet_i_set = r_md_m[aer_i][t, idx_range]
 
                     # iterate over each subsample (g) to get R_dg for the bin, and calc the cross section
                     # g_idx will place it it the right spot in C_back
-                    for g_idx_i, R_dg_wet_idx, R_dg_wet_i in zip(g_idx_range, idx_range, R_dg_wet_i_set):
+                    for g_idx_i, R_dg_wet_idx_i, R_dg_wet_i in zip(g_idx_range, idx_range, R_dg_wet_i_set):
 
                         # size parameter
-                        X_t_r = X[aer_i][t, R_dg_wet_idx]
+                        X_t_r = X[aer_i][t, R_dg_wet_idx_i]
 
                         # complex index of refraction
-                        n_wet_t_r = n_wet[aer_i][t, R_dg_wet_idx]
+                        n_wet_t_r = n_wet[aer_i][t, R_dg_wet_idx_i]
 
-                        # would need to swell wider range of particles (93 bins * subsamples)
-                        particle = Mie(x=X_t_r, m=n_wet_t_r)
-                        Q_ext[aer_i][t, R_dg_wet_idx] = particle.qext()
-                        Q_back[aer_i][t, R_dg_wet_idx] = particle.qb() / (4.0 * np.pi)
+                        # skip instances of nan
+                        if ~np.isnan(X_t_r):
 
-                        # calculate the extinction and backscatter cross section for the subsample
-                        #   part of Eqn 16 and 17
-                        C_ext_sample[g_idx_i] = Q_ext[t, r_bin_idx] * np.pi * (R_dg_wet_i ** 2.0)
-                        C_back_sample[g_idx_i] = Q_back[t, r_bin_idx] * np.pi * (R_dg_wet_i ** 2.0)
+                            # would need to swell wider range of particles (93 bins * subsamples)
+                            particle = Mie(x=X_t_r, m=n_wet_t_r)
+                            Q_ext_sample[g_idx_i]= particle.qext()
+                            Q_back_sample[g_idx_i] = particle.qb() / (4.0 * np.pi)
 
+                            # calculate the extinction and backscatter cross section for the subsample
+                            #   part of Eqn 16 and 17
+                            C_ext_sample[g_idx_i] = Q_ext_sample[g_idx_i] * np.pi * (R_dg_wet_i ** 2.0)
+                            C_back_sample[g_idx_i] = Q_back_sample[g_idx_i] * np.pi * (R_dg_wet_i ** 2.0)
+
+                    # once Q_back/ext for all subsamples g, have been calculated, Take the average for this main r bin
+                    #   Eqn 17
+                    Q_ext[aer_i][t, r_bin_idx] = (1.0 / n_samples) * np.nansum(Q_ext_sample)
+                    Q_back[aer_i][t, r_bin_idx] = (1.0 / n_samples) * np.nansum(Q_back_sample)
 
                     # once C_back/ext for all subsamples g, have been calculated, Take the average for this main r bin
                     #   Eqn 17
@@ -1054,8 +1089,10 @@ def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md
     S = sigma_ext_tot / sigma_back_tot
 
     # store all variables in a dictionary
-    optics = {'S': S, 'Q_ext':Q_ext, 'Q_back':Q_back, 'C_ext': C_ext, 'C_back': C_back,
+    optics = {'S': S, 'Q_ext': Q_ext, 'Q_back': Q_back, 'C_ext': C_ext, 'C_back': C_back,
               'sigma_ext': sigma_ext, 'sigma_back': sigma_back}
+
+    plt.plot(S[~np.isnan(S)])
 
     return optics
 
@@ -1077,7 +1114,7 @@ def main():
     # use PM1 or PM10 data?
     process_type = 'PM10-1'
 
-    # soot or no soot? ('withSoot' or 'noSoot')
+    # soot or no soot? (1 = 'withSoot' or 0 = 'noSoot')
     soot_flag = 1
 
     if soot_flag == 1:
@@ -1086,7 +1123,12 @@ def main():
         soot_str = 'noSoot'
 
     # Geisinger et al., 2017 subsampling?
-    Geisinger_subsample_flag = 0
+    Geisinger_subsample_flag = 1
+
+    if Geisinger_subsample_flag == 1:
+        Geisinger_str = 'geisingerSample'
+    else:
+        Geisinger_str = ''
 
     # number of samples to use in geisinger sampling
     n_samples = 4.0
@@ -1125,6 +1167,9 @@ def main():
     # aer names in the complex index of refraction files
     aer_names = {'(NH4)2SO4': 'Ammonium sulphate', 'NH4NO3': 'Ammonium nitrate',
                 'CORG': 'Organic carbon', 'NaCl': 'Generic NaCl', 'CBLK':'Soot', 'MURK': 'MURK'}
+
+    # raw data used to make aerosols
+    orig_particles = ['CORG', 'CL', 'CBLK', 'NH4', 'SO4', 'NO3']
 
     # density of molecules [kg m-3]
     # CBLK: # Zhang et al., (2016) Measuring the morphology and density of internally mixed black carbon
@@ -1206,7 +1251,7 @@ def main():
 
     # interpolated r values to from the Geisinger et al 2017 approach
     # will increase the number of r bins to (number of r bins * n_samples)
-    R_dg_microns = Geisinger_increase_r_bins(dN, r_d_orig_bins_microns, n_samples=4.0)
+    R_dg_microns = Geisinger_increase_r_bins(dN, r_d_orig_bins_microns, n_samples=n_samples)
     R_dg_m = R_dg_microns * 1.0e-06
 
     # which set of radius is going to be swollen?
@@ -1223,7 +1268,8 @@ def main():
     if (process_type == 'PM1') | (process_type == 'PM10-1'):
 
         # Read in mass data [grams m-3]
-        PM1_mass_in = read_PM1_mass_data(massdatadir, year)
+        # keep idx for rows that had missing data of the major species
+        PM1_mass_in, pm1_qaqc_idx = read_PM1_mass_data(massdatadir, year)
 
         # Trim times
         # as WXT and mass data are 15 mins and both line up exactly already
@@ -1233,6 +1279,7 @@ def main():
         # Time match so mass and WXT times line up INTERNALLY as well
         date_range = np.array(eu.date_range(WXT_in['time'][0], WXT_in['time'][-1], 15, 'minutes'))
 
+        # ToDo - these two are very time consuming, make it more efficient
         # make sure there are no time stamp gaps in the data so mass and WXT will match up perfectly, timewise.
         print 'beginning time matching for WXT...'
         WXT_15min = internal_time_completion(WXT_in, date_range)
@@ -1279,6 +1326,21 @@ def main():
                 #   Therefore np.nan all negative masses!
                 idx = np.where(PM10m1_mass_hourly[key] < 0)
                 PM10m1_mass_hourly[key][idx] = np.nan
+
+        # ToDo make this more efficient...
+        # data: PM10m1_mass_hourly, PM1_mass_hourly (will be raw input, no aerosols just yet!)
+        # remove all aerosol values for rows that have any nans
+        for pm10_set in [PM10m1_mass_hourly, PM1_mass_hourly, PM10_mass]:
+            for part_i in orig_particles:
+                bools = np.isnan(pm10_set[key])
+
+                # turn all the part_i variables at the same time into nans
+                for part_i in orig_particles:
+                    PM10m1_mass_hourly[part_i][bools] = np.nan
+                    PM1_mass_hourly[part_i][bools] = np.nan
+                    PM10_mass[part_i][bools] = np.nan
+
+
 
     # ==============================================================================
     # Process data
@@ -1382,7 +1444,7 @@ def main():
         # The main beast. Calculate all the optical properties, and outputs the lidar ratio
         optics = calculate_lidar_ratio(aer_particles, WXT['time'], ceil_lambda, r_md_m,  n_wet, num_conc)
     else:
-        optics = calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet, num_conc,
+        optics = calculate_lidar_ratio_geisinger(aer_particles, WXT['time'], ceil_lambda, r_md_m,  n_wet, num_conc,
                                     n_samples, r_d_orig_bins_m)
 
     # extract out the lidar ratio
@@ -1441,7 +1503,7 @@ def main():
     # plt.ylim([20.0, 60.0])
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+'_dailybinned_lt60.png')
+    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_dailybinned_lt60.png')
     plt.close(fig)
 
     # HISTOGRAM - S
@@ -1451,7 +1513,7 @@ def main():
     plt.suptitle('Lidar Ratio:\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Lidar Ratio')
     plt.ylabel('Frequency')
-    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+'_histogram_lt60.png')
+    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_histogram_lt60.png')
     plt.close(fig)
 
     # TIMESERIES - S - not binned
@@ -1462,7 +1524,7 @@ def main():
     plt.xlabel('Date [dd/mm]')
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+'_timeseries_lt60.png')
+    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_timeseries_lt60.png')
     plt.close(fig)
 
     # SCATTER - S vs RH (PM1)
@@ -1476,7 +1538,7 @@ def main():
     plt.suptitle('Lidar Ratio with soot fraction - r='+r_str+':\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('RH')
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_vs_RH_'+year+'_'+savesub+'_'+process_type+'_scatter_lt60.png')
+    plt.savefig(savedir + 'S_vs_RH_'+year+'_'+savesub+'_'+process_type+Geisinger_str+'_scatter_lt60.png')
     plt.close(fig)
 
     # ------------------------------------------------
