@@ -11,6 +11,82 @@ July 16 - old version of calc_n_murk () incorrect proportions as it assumed to u
 __author__ = 'elliott_warren'
 
 
+def part_file_read(particle):
+
+    """
+    Locate and read the particle file. STore wavelength, n and k parts in dictionary
+    """
+
+    print 'Reading particle ...' + particle
+
+    from numpy import array
+
+    # particle data dir
+    # part_datadir = '/media/sf_HostGuestShared/MieScatt/complex index of refraction/'
+
+    part_datadir = '/home/nerc/Documents/MieScatt/aerosol_files/'
+
+    # find particle filename
+    if particle == 'Ammonium nitrate':
+        part_file = 'refract_ammoniumnitrate'
+    elif particle == 'Ammonium sulphate':
+        part_file = 'refract_ammoniumsulphate'
+    elif particle == 'Organic carbon':
+        part_file = 'refract_ocff'
+    elif particle == 'Oceanic':
+        part_file = 'refract_oceanic'
+    elif particle == 'Soot':
+        part_file = 'refract_soot_bond'
+    elif particle == 'Biogenic':
+        part_file = 'refract_biogenic'
+    elif particle == 'Generic NaCl':
+        part_file = 'refract_nacl'
+    elif particle == 'water':
+        part_file = 'refract_water.txt'
+    else:
+        raise ValueError("incorrect species or not yet included in particle list")
+
+    # full path
+    file_path = part_datadir + part_file
+
+    # empty dictionary to hold data
+    data = {'lambda': [],
+            'real': [],
+            'imaginary': []}
+
+    # open file and read down to when data starts
+    file = open(file_path, "r")
+    s = file.readline()
+    s = s.rstrip('\n\r')
+
+    while s != '*BEGIN_DATA':
+        s = file.readline()
+        s = s.rstrip('\n\r')
+
+    line = file.readline() # read line
+    line = line.rstrip('\n\r')
+
+    while (line != '*END') & (line != '*END_DATA'):
+        line = ' '.join(line.split()) # remove leading and trailing spaces. Replace multiple spaces in the middle with one.
+        line = line.decode('utf8').encode('ascii', errors='ignore') # remove all non-ASCII characters
+
+        # if line isn't last line in file
+
+        line_split = line.split(' ')
+        data['lambda'] += [float(line_split[0])]
+        data['real'] += [float(line_split[1])]
+        data['imaginary'] += [float(line_split[2])]
+
+        # read next line
+        line = file.readline()
+        line = line.rstrip('\n\r')
+
+    # convert to numpy array
+    for key, value in data.iteritems():
+        data[key] = array(value)
+
+    return data
+
 def linear_interpolate_n(particle, aim_lambda):
 
     """
@@ -24,84 +100,6 @@ def linear_interpolate_n(particle, aim_lambda):
     """
 
     import numpy as np
-
-    def part_file_read(particle):
-
-        """
-        Locate and read the particle file. STore wavelength, n and k parts in dictionary
-        """
-
-        print 'Reading particle ...' + particle
-
-        from numpy import array
-
-        # particle data dir
-        # part_datadir = '/media/sf_HostGuestShared/MieScatt/complex index of refraction/'
-
-        part_datadir = '/home/nerc/Documents/MieScatt/aerosol_files/'
-
-        # find particle filename
-        if particle == 'Ammonium nitrate':
-            part_file = 'refract_ammoniumnitrate'
-        elif particle == 'Ammonium sulphate':
-            part_file = 'refract_ammoniumsulphate'
-        elif particle == 'Organic carbon':
-            part_file = 'refract_ocff'
-        elif particle == 'Oceanic':
-            part_file = 'refract_oceanic'
-        elif particle == 'Soot':
-            part_file = 'refract_soot_bond'
-        elif particle == 'Biogenic':
-            part_file = 'refract_biogenic'
-        elif particle == 'Generic NaCl':
-            part_file = 'refract_nacl'
-        elif particle == 'water':
-            part_file = 'refract_water.txt'
-        else:
-            raise ValueError("incorrect species or not yet included in particle list")
-
-        # full path
-        file_path = part_datadir + part_file
-
-        if particle == 'soot':
-            1
-
-        # empty dictionary to hold data
-        data = {'lambda': [],
-                'real': [],
-                'imaginary': []}
-
-        # open file and read down to when data starts
-        file = open(file_path, "r")
-        s = file.readline()
-        s = s.rstrip('\n\r')
-
-        while s != '*BEGIN_DATA':
-            s = file.readline()
-            s = s.rstrip('\n\r')
-
-        line = file.readline() # read line
-        line = line.rstrip('\n\r')
-
-        while (line != '*END') & (line != '*END_DATA'):
-            line = ' '.join(line.split()) # remove leading and trailing spaces. Replace multiple spaces in the middle with one.
-
-            # if line isn't last line in file
-
-            line_split = line.split(' ')
-            data['lambda'] += [float(line_split[0])]
-            data['real'] += [float(line_split[1])]
-            data['imaginary'] += [float(line_split[2])]
-
-            # read next line
-            line = file.readline()
-            line = line.rstrip('\n\r')
-
-        # convert to numpy array
-        for key, value in data.iteritems():
-            data[key] = array(value)
-
-        return data
 
 
     # read in the particle file data
@@ -289,7 +287,7 @@ def main():
                 'Organic carbon': 0.38}
 
     # all the aerosol types
-    # all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'oceanic', 'biogenic', 'NaCl', 'soot']
+    all_aer_order = ['Ammonium sulphate', 'Ammonium nitrate', 'Organic carbon', 'Biogenic', 'Generic NaCl', 'Soot', 'MURK']
     # all_aer = ['ammonium_sulphate', 'ammonium_nitrate', 'organic_carbon', 'biogenic', 'NaCl', 'soot']
     all_aer = {'Ammonium sulphate': 'red', 'Ammonium nitrate':'orange', 'Organic carbon': [0.05, 0.9, 0.4],
                'Biogenic': [0.05,0.56,0.85], 'Generic NaCl': 'magenta', 'Soot': 'brown'}
@@ -389,19 +387,22 @@ def main():
     # plot
     fig = plt.figure(figsize=(6, 4))
 
-    for aer_i, Q_dry_i in Q_dry.iteritems():
+    for aer_i in all_aer_order:
 
         # plot it
-        plt.semilogx(r_md_microm, Q_dry_i, label=aer_i, color=all_aer[aer_i])
+        plt.semilogx(r_md_microm, Q_dry[aer_i], label=aer_i, color=all_aer[aer_i])
         # plt.semilogx(r_md_microm, Q_dry, label='dry murk', color=[0,0,0])
         # plt.semilogx(r_m_microm, Q_del, label='deliquescent murk (RH = ' + str(RH) + ')')
         # plt.semilogx(r_m_microm, Q_coat, label='coated murk (RH = ' + str(RH) + ')')
 
-    # # average Q_dry if multiple Q_drys were calculated
-    # if Q_dry.__len__() != 1:
-    #     q = np.array(Q_dry)
-    #     Q_dry_avg = np.mean(q, axis=0)
-    #     ax = plt.semilogx(r_md_microm, Q_dry_avg, label='average', color='black', linewidth=2)
+    # for aer_i, Q_dry_i in Q_dry.iteritems():
+    #
+    #     # plot it
+    #     plt.semilogx(r_md_microm, Q_dry_i, label=aer_i, color=all_aer[aer_i])
+    #     # plt.semilogx(r_md_microm, Q_dry, label='dry murk', color=[0,0,0])
+    #     # plt.semilogx(r_m_microm, Q_del, label='deliquescent murk (RH = ' + str(RH) + ')')
+    #     # plt.semilogx(r_m_microm, Q_coat, label='coated murk (RH = ' + str(RH) + ')')
+
 
     # plt.title('lambda = ' + str(ceil_lambda[0]) + 'nm')
     plt.xlabel(r'$r_{md} \/\mathrm{[\mu m]}$', labelpad=-10, fontsize=13)
@@ -414,7 +415,7 @@ def main():
     plt.tick_params(axis='both',labelsize=10)
     plt.grid(b=True, which='major', color='grey', linestyle='--')
     plt.grid(b=True, which='minor', color=[0.85, 0.85, 0.85], linestyle='--')
-    plt.savefig(savedir + 'Q_ext_manyAer_' + str(ceil_lambda[0]) + 'nm.png')
+    plt.savefig(savedir + 'Q_ext_manyAer2_' + str(ceil_lambda[0]) + 'nm.png')
     print 'data dir is... ' + savedir + 'Q_ext_manyAer_' + str(ceil_lambda[0]) + 'nm.png'
     plt.tight_layout(h_pad=10.0)
     plt.close()
