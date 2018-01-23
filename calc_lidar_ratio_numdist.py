@@ -1089,10 +1089,8 @@ def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md
     S = sigma_ext_tot / sigma_back_tot
 
     # store all variables in a dictionary
-    optics = {'S': S, 'Q_ext': Q_ext, 'Q_back': Q_back, 'C_ext': C_ext, 'C_back': C_back,
+    optics = {'S': S, 'C_ext': C_ext, 'C_back': C_back,
               'sigma_ext': sigma_ext, 'sigma_back': sigma_back}
-
-    plt.plot(S[~np.isnan(S)])
 
     return optics
 
@@ -1133,6 +1131,11 @@ def main():
     # number of samples to use in geisinger sampling
     n_samples = 4.0
 
+    # wavelength to aim for
+    ceil_lambda = [0.905e-06]
+    # ceil_lambda = [0.532e-06]
+    ceil_lambda_str_nm = str(ceil_lambda[0] * 1.0e09) + 'nm'
+
     # string for saving figures and choosing subdirectories
     savesub = process_type+'_'+soot_str
 
@@ -1141,8 +1144,12 @@ def main():
     datadir = '/home/nerc/Documents/MieScatt/data/'
 
     # save dir
+    if Geisinger_subsample_flag == 1:
+        savesubdir = savesub + '/geisingersample_2xdN_for_2lowestAPSbins/'
+    else:
+        savesubdir = savesub
 
-    savesubdir = savesub
+
     savedir = maindir + 'figures/LidarRatio/' + savesubdir +'/'
 
     # data
@@ -1186,8 +1193,6 @@ def main():
     # pure water density
     water_density = 1000.0 # kg m-3
 
-    # wavelength to aim for
-    ceil_lambda = [0.905e-06]
 
     # CLASSIC dry radii [microns]
     r_d_classic_microns = {'(NH4)2SO4': 9.5e-02, # accumulation mode
@@ -1204,7 +1209,7 @@ def main():
     # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
     pm1t10_rv_microns = 1.9848902137534531 / 2.0
 
-    # turn units to meters and place an entery for each aerosol
+    # turn units to meters and place an entry for each aerosol
     pm1t10_rv_m = {}
     for key in r_d_classic_m.iterkeys():
         pm1t10_rv_m[key] = pm1t10_rv_microns * 1.0e-6
@@ -1228,10 +1233,10 @@ def main():
     WXT_in['RH_frac'] = WXT_in['RH'] * 0.01
     WXT_in['time'] -= dt.timedelta(minutes=15) # change time from 'obs end' to 'start of obs', same as the other datasets
 
-    # load in S data
-    filename = datadir + 'pickle/' + 'S_woSoot_2016_equalWeight_lt60_PM10.pickle'
-    with open(filename, 'rb') as handle:
-        S_loaded = pickle.load(handle)
+    # # load in S data
+    # filename = datadir + 'pickle/' + 'S_woSoot_2016_equalWeight_lt60_PM10.pickle'
+    # with open(filename, 'rb') as handle:
+    #     S_loaded = pickle.load(handle)
 
     # read in clearflo winter number distribution
     # created on main PC space with calc_plot_N_r_obs.py
@@ -1239,6 +1244,11 @@ def main():
     filename = datadir + 'dN_dmps_aps_clearfloWinter_lt60_cut.pickle'
     with open(filename, 'rb') as handle:
         dN = pickle.load(handle)
+
+    # increase N in the first 2 bins of APS data as these are small due to the the discrepency between DMPS and APS
+    # measurements, as the first 3 APS bins are usually low and need to be corrected (Beddows et al ., 2010)
+    for b in [520, 560]:
+        dN['binned'][:, dN['D'] == b] *= 2.0
 
     # make a median distribution of dN
     dN['med'] = np.nanmedian(dN['binned'], axis=0)
@@ -1332,13 +1342,13 @@ def main():
         # remove all aerosol values for rows that have any nans
         for pm10_set in [PM10m1_mass_hourly, PM1_mass_hourly, PM10_mass]:
             for part_i in orig_particles:
-                bools = np.isnan(pm10_set[key])
+                bools = np.isnan(pm10_set[part_i])
 
                 # turn all the part_i variables at the same time into nans
-                for part_i in orig_particles:
-                    PM10m1_mass_hourly[part_i][bools] = np.nan
-                    PM1_mass_hourly[part_i][bools] = np.nan
-                    PM10_mass[part_i][bools] = np.nan
+                for key in orig_particles:
+                    PM10m1_mass_hourly[key][bools] = np.nan
+                    PM1_mass_hourly[key][bools] = np.nan
+                    PM10_mass[key][bools] = np.nan
 
 
 
@@ -1404,6 +1414,10 @@ def main():
     # r_md['CBLK'] = np.empty((len(date_range), len(r_d_microns)))
     r_md['CBLK'] = r_d_microns_dup
 
+    # make r_md['CBLK'] nan for all sizes, for times t, if mass data is not present for time t
+    # doesn't matter which mass is used, as all mass data have been corrected for if nans were present in other datasets
+    r_md['CBLK'][np.isnan(PM10m1_mass_hourly['CBLK']), :] = np.nan
+
     # calculate r_md for organic carbon using the MO empirically fitted g(RH) curves
     r_md['CORG'] = np.empty((len(WXT['time']), len(r_d_microns)))
     r_md['CORG'][:] = np.nan
@@ -1460,11 +1474,12 @@ def main():
         elif process_type == 'PM10-1':
                 mass_kg_kg = {'PM1': pm10m1_mass_kg_kg, 'PM10-1': pm10m1_mass_kg_kg}
                 WXT = WXT_hourly
+                N_weight = {'PM1': N_weight_pm1,'PM10-1': N_weight_pm10m1}
 
 
-        pickle_save = {'time': WXT['time'], 'optics': optics, 'WXT':WXT,
+        pickle_save = {'optics': optics, 'WXT':WXT, 'N_weight': N_weight,
                        'num_conc':num_conc, 'mass_kg_kg': mass_kg_kg, 'dN':dN, 'r_md':r_md}
-        with open(datadir + 'pickle/allvars_'+savesub+'_'+year+'.pickle', 'wb') as handle:
+        with open(datadir + 'pickle/allvars_'+savesub+'_'+year+'_geisingerSample_'+ceil_lambda_str_nm+'.pickle', 'wb') as handle:
             pickle.dump(pickle_save, handle)
 
     # get mean and nanstd from data
@@ -1473,6 +1488,8 @@ def main():
     stats_date_range = np.array(eu.date_range(WXT['time'][0], WXT['time'][-1] + dt.timedelta(days=1), 1, 'days'))
 
     stats ={}
+    # S_keep = deepcopy(S)
+    # S[S > 70] = np.nan
 
     for stat_i in ['mean', 'median', 'stdev', '25pct', '75pct']:
         stats[stat_i] = np.empty(len(stats_date_range))
@@ -1503,17 +1520,21 @@ def main():
     # plt.ylim([20.0, 60.0])
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_dailybinned_lt60.png')
+    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_dailybinned_lt60_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # HISTOGRAM - S
+
+    idx = np.logical_or(np.isnan(S), np.isnan(WXT_hourly['RH']))
+
     # plot all the S in raw form (hist)
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
-    ax.hist(S[~np.isnan(S)])
+    # ax.hist(S)
+    ax.hist(S[~idx])
     plt.suptitle('Lidar Ratio:\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Lidar Ratio')
     plt.ylabel('Frequency')
-    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_histogram_lt60.png')
+    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_histogram_lt60_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # TIMESERIES - S - not binned
@@ -1523,28 +1544,28 @@ def main():
     plt.suptitle('Lidar Ratio:\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Date [dd/mm]')
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
-    plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_timeseries_lt60.png')
+    plt.ylabel('Lidar Ratio [sr]')
+    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_timeseries_lt60_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # SCATTER - S vs RH (PM1)
     # quick plot 15 min S and RH for 2016.
-    corr = spearmanr(WXT['RH'],S)
+    corr = spearmanr(WXT['RH'], S)
     r_str = '%.2f' % corr[0]
-    fig, ax = plt.subplots(1,1,figsize=(8, 5))
-    scat = ax.scatter(WXT['RH'],S, c=N_weight_pm10m1['CBLK'])
+    fig, ax = plt.subplots(1,1,figsize=(8, 4))
+    scat = ax.scatter(WXT['RH'], S)
+    scat = ax.scatter(WXT['RH'], S, c=N_weight_pm10m1['CBLK']*100.0, vmin= 0.0, vmax = 30.0)
     cbar = plt.colorbar(scat, ax=ax)
-    # cbar.set_label(r'fraction soot$', labelpad=-38, y=1.075, rotation=0)
-    plt.suptitle('Lidar Ratio with soot fraction - r='+r_str+':\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
-    plt.xlabel('RH')
-    plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_vs_RH_'+year+'_'+savesub+'_'+process_type+Geisinger_str+'_scatter_lt60.png')
+    cbar.set_label('Soot [%]', labelpad=-20, y=1.1, rotation=0)
+    #   cbar.set_label('Soot [%]', labelpad=-20, y=1.075, rotation=0)
+    # plt.suptitle('Lidar Ratio with soot fraction - r='+r_str+':\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    plt.xlabel(r'$RH \/[\%]$')
+    plt.ylabel(r'$Lidar Ratio \/[sr]$')
+    plt.tight_layout()
+    plt.savefig(savedir +'/S_vs_RH_'+year+'_'+process_type+Geisinger_str+'_scatter_lt60_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # ------------------------------------------------
-
-
-
 
     return
 
