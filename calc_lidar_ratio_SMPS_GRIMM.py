@@ -1,8 +1,8 @@
 """
-Read in mass data from London and calculate the Lidar ratio using the CLASSIC scheme approach, from Ben's help.
+Read in mass and number distribution data from Chilbolton to calculate the Lidar ratio.
 
-Created by Elliott Fri 17 Nov 2017
-Taken from calc_lidar_ratio.py on 29 Nov 2017
+Created by Elliott Tues 23 Jan
+Taken from calc_lidar_ratio_numdist.py
 """
 
 import matplotlib.pyplot as plt
@@ -12,6 +12,7 @@ from copy import deepcopy
 
 import numpy as np
 import datetime as dt
+from dateutil import tz
 from scipy.stats import spearmanr
 
 import ellUtils as eu
@@ -82,7 +83,7 @@ def read_PM1_mass_data(massdatadir, year):
     for header_i in headers:
         bools = np.logical_or(mass[header_i] < 0.0, np.isnan(mass[header_i]))
 
-        # store bool if it is one of the major pm consituents, so OM10 and OC/BC PM10 data can be removed too
+        # store bool if it is one of the major pm consituents, so OM10 and OC/BC pm10 data can be removed too
         if header_i in ['NH4', 'NO3', 'SO4', 'CORG', 'CL', 'CBLK']:
             qaqc_idx[header_i] = np.where(bools == True)[0]
 
@@ -97,12 +98,91 @@ def read_PM1_mass_data(massdatadir, year):
 
     return mass, qaqc_idx_unique
 
-def read_EC_BC_mass_data(massdatadir, year):
+def read_PM_mass_data(massdatadir, site_ins, pmtype, year):
+
+    """
+    Read in PM2.5 mass data from NK
+    Raw data is micrograms m-3 but converted to and outputed as grams m-3
+    :param year:
+    :param pmtype: what type of pm to read in, that is in the filename (e.g. pm10, pm2p5)
+    :return: mass
+    :return qaqc_idx_unique: unique index list where any of the main species observations are missing
+    """
+
+    massfname = pmtype+'species_Hr_'+site_ins['site_long']+'_DEFRA_'+year+'.csv'
+    massfilepath = massdatadir + massfname
+    massrawData = np.genfromtxt(massfilepath, delimiter=',', dtype="|S20") # includes the header
+
+    # extract and process time, converting from time ending GMT to time ending UTC
+
+    from_zone = tz.gettz('GMT')
+    to_zone = tz.gettz('UTC')
+
+    # replace 24:00:00 with 00:00:00, then add 1 onto the day to compensate
+    #   datetime can't handle the hours = 24 (doesn't round the day up).
+    rawtime = [i[0] + ' ' + i[1].replace('24:00:00', '00:00:00') for i in massrawData[5:]]
+    pro_time = np.array([dt.datetime.strptime(i, '%d/%m/%Y %H:%M:%S') for i in rawtime])
+    idx = [True if i.hour == 0 else False for i in pro_time]
+    pro_time[idx] = pro_time[idx] + dt.timedelta(days=1)
+
+    # convert from 'tme end GMT' to 'time end UTC'
+    pro_time = [i.replace(tzinfo=from_zone) for i in pro_time] # set datetime's original timezone as GMT
+    pro_time = np.array([i.astimezone(to_zone) for i in pro_time]) # convert from GMT to UTC
+
+    mass = {'time': pro_time}
+
+    # get headers without the site part of it (S04-PM2.5 to S04) and remove any trailing spaces
+    headers = [i.split('-')[0] for i in massrawData[4]]
+    headers = [i.replace(' ', '') for i in headers]
+
+    # ignore first entry, as that is the date&time
+    for h, header_site in enumerate(headers):
+
+        # # get the main part of the header from the
+        # split = header_site.split('-')
+        # header = split[0]
+
+        if header_site == 'CL': # (what will be salt)
+            # turn '' into 0.0, as missing values can be when there simply wasn't any salt recorded,
+            # convert from micrograms to grams
+            mass[header_site] = np.array([0.0 if i[h] == 'No data' else i[h] for i in massrawData[5:]], dtype=float) * 1e-06
+
+        elif header_site in ['NH4', 'SO4', 'NO3', 'Na']: # if not CL but one of the main gases needed for processing
+            # turn '' into nans
+            # convert from micrograms to grams
+            mass[header_site] = np.array([np.nan if i[h] == 'No data' else i[h] for i in massrawData[5:]], dtype=float) * 1e-06
+
+
+    # QAQC - turn all negative values in each column into nans if one of them is negative
+    qaqc_idx = {}
+    for header_i in headers:
+
+        # store bool if it is one of the major pm consituents, so OM10 and OC/BC pm10 data can be removed too
+        if header_i in ['NH4', 'NO3', 'SO4', 'CORG', 'Na', 'CL', 'CBLK']:
+
+            bools = np.logical_or(mass[header_i] < 0.0, np.isnan(mass[header_i]))
+
+            qaqc_idx[header_i] = np.where(bools == True)[0]
+
+
+            # turn all values in the row negative
+            for header_j in headers:
+                if header_j not in ['Date', 'Time', 'Status']:
+                    mass[header_j][bools] = np.nan
+
+    # find unique instances of missing data
+    qaqc_idx_unique = np.unique(np.hstack(qaqc_idx.values()))
+
+
+    return mass, qaqc_idx_unique
+
+def read_EC_BC_mass_data(massdatadir, site_ins, pmtype, year):
 
     """
     Read in the elemental carbon (EC) and organic carbon (OC) mass data from NK
     Raw data is micrograms m-3 but converted to and outputed as grams m-3
     :param year:
+    :param pmtype: which PM to get the data for (must match that used in the filename) e.g. PM10, PM2p5
     :return: mass
 
     EC and BC (soot) are treated the same in CLASSIC, therefore EC will be taken as BC here.
@@ -111,7 +191,7 @@ def read_EC_BC_mass_data(massdatadir, year):
     # make sure year is string
     year = str(year)
 
-    massfname = 'OC_EC_Daily_North_Kensington_DEFRA_'+year+'.csv'
+    massfname = pmtype+'_OC_EC_Daily_'+site_ins['site_long']+'_DEFRA_'+year+'.csv'
     massfilepath = massdatadir + massfname
     massrawData = np.genfromtxt(massfilepath, delimiter=',', skip_header=4, dtype="|S20") # includes the header
 
@@ -120,8 +200,14 @@ def read_EC_BC_mass_data(massdatadir, year):
             'CORG': np.array([np.nan if i[4] == 'No data' else i[4] for i in massrawData[1:]], dtype=float)}
 
     # times were valid from 12:00 so add the extra 12 hours on
-    # but they were also hour ending, and as all other data is hour beginning, then take 1 off (so +11 in total)
-    mass['time'] += dt.timedelta(hours=11)
+    mass['time'] += dt.timedelta(hours=12)
+
+    # convert timezone from GMT to UTC
+    from_zone = tz.gettz('GMT')
+    to_zone = tz.gettz('UTC')
+
+    mass['time'] = [i.replace(tzinfo=from_zone) for i in mass['time']] # set datetime's original timezone as GMT
+    mass['time'] = np.array([i.astimezone(to_zone) for i in mass['time']]) # convert from GMT to UTC
 
     # convert units from micrograms to grams
     mass['CBLK'] *= 1e-06
@@ -135,10 +221,10 @@ def read_EC_BC_mass_data(massdatadir, year):
 
     return mass
 
-def read_PM10_mass_data(massdatadir, year):
+def read_pm10_mass_data(massdatadir, site_ins, year):
 
     """
-    Read in the other PM10 mass data from NK
+    Read in the other pm10 mass data from NK
     Raw data is micrograms m-3 but converted to and outputed as grams m-3
     :param year:
     :return: mass
@@ -148,7 +234,7 @@ def read_PM10_mass_data(massdatadir, year):
     # make sure year is string
     year = str(year)
 
-    massfname = 'PM10species_Hr_North_Kensington_DEFRA_'+year+'.csv'
+    massfname = 'pm10species_Hr_'+site_ins['site_long']+'_DEFRA_'+year+'.csv'
     massfilepath = massdatadir + massfname
     massrawData = np.genfromtxt(massfilepath, delimiter=',', skip_header=4, dtype="|S20") # includes the header
 
@@ -219,29 +305,6 @@ def trim_mass_wxt_times(mass, WXT):
 
     return mass, WXT
 
-# fake number distribution
-
-def normpdf(x, mean, sd):
-
-    """
-    Gives the probability of y, given a value of x, assuming a gaussian distribution
-    :param x:
-    :param mean:
-    :param sd:
-    :return:
-
-    units of p(y) is a fraction
-    """
-
-    from math import exp
-
-    var = float(sd) ** 2.0
-    pi = 3.1415926
-    denom = (2.0 * pi * var) ** 0.5
-    num = exp(-(float(x) - float(mean)) ** 2.0 / (2.0 * var))
-
-    return num / denom
-
 
 # Process
 
@@ -268,8 +331,6 @@ def Geisinger_increase_r_bins(dN, r_d_orig_bins_microns, n_samples=4.0):
                      for i in range(len(r_d_orig_bins_microns))
                      for g in range(1,int(n_samples)+1)])
 
-    # append the last upper edge, as the calculation misses that one off
-    # R_dg = np.append(R_dg, R_db[-1])
 
     # convert to microns from nanometers
     R_dg_microns = R_dg * 1e-3
@@ -343,60 +404,47 @@ def internal_time_completion(data, date_range):
 
     return data_full
 
-def merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly):
+def merge_pm_mass(pm_mass_in, pm_oc_bc):
 
     """
-    Merge (including time matching) the PM10 masses together (OC and BC in with the others).
-    RH used in time matching but is not merged with the PM10 data
+    Merge (including time matching) the pm10 masses together (OC and BC in with the others).
 
-    :param WXT_hourly:
-    :param PM10_mass_in:
-    :param OC_BC_hourly:
-    :return:
+    :param pm_mass_in:
+    :param pm_oc_bc:
+    :return: pm_mass_all
     """
 
     # double check that OC_EC['time'] is an array, not a list, as lists do not work with the np.where() function below.
-    if type(OC_BC_hourly['time']) == list:
-        OC_BC_hourly['time'] = np.array(OC_BC_hourly['time'])
+    if type(pm_oc_bc['time']) == list:
+        pm_oc_bc['time'] = np.array(pm_oc_bc['time'])
 
-    # merge PM10 data (time will match WXT_hourly)
-    PM10_mass_all = {'time': WXT_hourly['time']}
-    for key, data in PM10_mass_in.iteritems():
-        if key != 'time':
-           PM10_mass_all[key] = np.empty(len(PM10_mass_all['time']))
-           PM10_mass_all[key][:] = np.nan
+    # set up pm_mass_all dictionary
+    # doesn't matter which mass['time'] is used, as if data is missing from either dataset for a time t, then that
+    #   time is useless anyway.
 
-    for key in OC_BC_hourly.iterkeys():
-        if key != 'time':
-           PM10_mass_all[key] = np.empty(len(PM10_mass_all['time']))
-           PM10_mass_all[key][:] = np.nan
 
-    # fill the PM10_merge arrays
-    for t, time_t in enumerate(PM10_mass_all['time']):
-        # _, idx_pm10, _ = eu.nearest(PM10_mass_in['time'], time_t)
-        idx_pm10 = np.where(PM10_mass_in['time'] == time_t)
+    # fill pm10_mass_all with the OC and BC
+    for key in ['CORG', 'CBLK']:
+       pm_mass_in[key] = np.empty(len(pm_mass_in['time']))
+       pm_mass_in[key][:] = np.nan
 
-        if idx_pm10[0].size != 0:
-            for key, data in PM10_mass_in.iteritems():
-                if key != 'time':
-                    PM10_mass_all[key][t] = data[idx_pm10]
+    # fill the pm10_merge arrays
+    for t, time_t in enumerate(pm_mass_in['time']):
 
-        idx_oc_bc = np.where(np.array(OC_BC_hourly['time']) == time_t)
+        # find corresponding time
+        idx_oc_bc = np.where(np.array(pm_oc_bc['time']) == time_t)
+
+        # fill array
         if idx_oc_bc[0].size != 0:
-            for key, data in OC_BC_hourly.iteritems():
-                if key != 'time':
-                    PM10_mass_all[key][t] = data[idx_oc_bc]
+            for key in ['CORG', 'CBLK']:
+                pm_mass_in[key][t] = pm_oc_bc[key][idx_oc_bc]
 
-
-    # set mass and WXT data as the hourly data values
-    mass = PM10_mass_all
-
-    return mass
+    return pm_mass_in
 
 def coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass):
 
     """
-    Coarsen the PM1 data from 15 mins to hourly data to match PM10 and WXT hourly data
+    Coarsen the PM1 data from 15 mins to hourly data to match pm10 and WXT hourly data
     :param WXT_hourly:
     :param PM1_mass:
     :return: PM1_mass_hourly
@@ -438,15 +486,147 @@ def coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass):
 
     return PM1_mass_hourly
 
+def two_pm_dataset_difference(pm_small_mass, pm_big_mass):
+
+    """
+    Take the difference of the two pm datasets (smaller one first in the arguments list!)
+    :param pm_small_mass: the smaller mass dataset (e.g. pm2p5 mass)
+    :param pm_big_mass: the larger mass dataset (e.g. pm10 mass)
+    :return: pm_diff_mass: differences of the two datasets
+    """
+
+    # create pm10m2p5 mass (pm10 minus pm2.5)
+    pm_diff_mass = {'time': pm_big_mass['time']}
+    for key in pm_small_mass.iterkeys():
+        if key != 'time':
+            pm_diff_mass[key] = pm_big_mass[key] - pm_small_mass[key]
+
+            # QAQC
+            # PM_big - PM_small is not always >0
+            #   Therefore np.nan all negative masses!
+            idx = np.where(pm_diff_mass[key] < 0)
+            pm_diff_mass[key][idx] = np.nan
+
+    return pm_diff_mass
+
+def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
+
+    """
+    time match all the main data dictionaries together (pm, RH and dN data), according to the time resolution given
+    (timeRes).
+
+    :param pm2p5_mass_in:
+    :param pm10_mass_in:
+    :param met_in: contains RH, Tair, air pressure
+    :param dN_in:
+    :param timeRes:
+    :return:
+    """
+
+    ## 1. set up dictionaries with times
+    # Match data to the dN data.
+    # time range - APS time res: 5 min, DMPS time res: ~12 min
+    start_time = dN_in['time'][0]
+    end_time = dN_in['time'][-1]
+    time_range = eu.date_range(start_time, end_time, timeRes, 'minutes')
+
+    # make sure datetimes are in UTC
+    from_zone = tz.gettz('GMT')
+    to_zone = tz.gettz('UTC')
+    time_range = np.array([i.replace(tzinfo=from_zone) for i in time_range])
+
+
+    # set up dictionaries (just with time at the moment)
+    pm2p5_mass = {'time': time_range}
+    pm10_mass = {'time': time_range}
+    dN = {'time': time_range, 'D': dN_in['D'], 'dD': dN_in['dD']}
+    met = {'time': time_range}
+
+    ## 2. set up empty arrays within dictionaries
+    # prepare empty arrays within the outputted dictionaries for the other variables, ready to be filled.
+    for var, var_in in zip([pm2p5_mass, pm10_mass, met, dN], [pm2p5_mass_in, pm10_mass_in, met_in, dN_in]):
+
+        for key in var_in.iterkeys():
+            # only fill up the variables
+            if key not in ['time', 'D', 'dD']:
+
+                # make sure the dimensions of the arrays are ok. Will either be 1D (e.g RH) or 2D (e.g. dN)
+                dims = var_in[key].ndim
+                if dims == 1:
+                    var[key] = np.empty(len(time_range))
+                    var[key][:] = np.nan
+                else:
+                    var[key] = np.empty((len(time_range), var_in[key].shape[1]))
+                    var[key][:] = np.nan
+
+
+    ## 3. fill the variables with time averages
+    # use a moving subsample assuming the data is in ascending order
+    for var, var_in in zip([pm2p5_mass, pm10_mass, met, dN], [pm2p5_mass_in, pm10_mass_in, met_in, dN_in]):
+
+        # set skip idx to 0 to begin with
+        #   it will increase after each t loop
+        skip_idx = 0
+
+        for t in range(len(time_range)):
+
+
+            # find data for this time
+            binary = np.logical_and(var_in['time'][skip_idx:skip_idx+150] > time_range[t],
+                                    var_in['time'][skip_idx:skip_idx+150] <= time_range[t] + dt.timedelta(minutes=timeRes))
+
+            # actual idx of the data within the entire array
+            skip_idx_set_i = np.where(binary == True)[0] + skip_idx
+
+            # create means of the data for this time period
+            for key in var.iterkeys():
+                if key not in ['time', 'D', 'dD']:
+
+                    dims = var_in[key].ndim
+                    if dims == 1:
+                        var[key][t] = np.nanmean(var_in[key][skip_idx_set_i])
+                    else:
+                        var[key][t, :] = np.nanmean(var_in[key][skip_idx_set_i, :])
+
+            # change the skip_idx for the next loop to start just after where last idx finished
+            if skip_idx_set_i.size != 0:
+                skip_idx = skip_idx_set_i[-1] + 1
+
+    return pm2p5_mass, pm10_mass, met, dN
+
+# create a combined num_concentration with the right num_conc for the right D bins. e.g. pm2p5 for D < 2.5
+def merge_two_pm_dataset_num_conc(num_conc_pm2p5, num_conc_pm10m2p5, dN, limit):
+
+    """
+    Merge the number concentration dictionaries from the two pm datasets by taking the right part of each
+    e.g. num_conc for D <2.5 = num_conc from 2.5
+    :param num_conc_pm2p5:
+    :param num_conc_pm10m2p5:
+    :param limit:
+    :return:
+    """
+
+    # pm10 - PM1 (use the right parts of the num concentration for the rbins e.g. pm1 mass for r<1, pm10-1 for r>1)
+    idx_pm2p5 = np.where(dN['D'] <= limit)[0] # 'D' is in nm not microns!
+    idx_pm10m2p5 = np.where(dN['D'] > limit)[0]
+
+    # concatonate num_conc
+    # r<=1 micron are weighted by PM1, r>1 are weighted by pm10-1
+    num_conc = {}
+    for aer_i in num_conc_pm2p5.iterkeys():
+        num_conc[aer_i] = np.hstack((num_conc_pm2p5[aer_i][:, idx_pm2p5], num_conc_pm10m2p5[aer_i][:, idx_pm10m2p5]))
+
+    return num_conc, idx_pm2p5, idx_pm10m2p5
+
 ## masses and moles
 
 ### main masses and moles script
-def calculate_moles_masses(mass, WXT, aer_particles, inc_soot=False):
+def calculate_moles_masses(mass, met, aer_particles, inc_soot=False):
 
     """
     Calculate the moles and mass [kg kg-1] of the aerosol. Can set soot to on or off (turn all soot to np.nan)
     :param mass: [g cm-3]
-    :param WXT:
+    :param met:
     :param aer_particles:
     :param inc_soot: [bool]
     :return: moles, mass_kg_kg
@@ -480,7 +660,7 @@ def calculate_moles_masses(mass, WXT, aer_particles, inc_soot=False):
 
     # convert masses from g m-3 to kg kg-1_air for swelling.
     # Also creates the air density and is stored in WXT
-    mass_kg_kg, WXT = convert_mass_to_kg_kg(mass, WXT, aer_particles)
+    mass_kg_kg, WXT = convert_mass_to_kg_kg(mass, met)
 
 
     # temporarily make black carbon mass nan
@@ -563,82 +743,83 @@ def calc_amm_sulph_and_amm_nit_from_gases(moles, mass):
 
     return moles, mass
 
-def convert_mass_to_kg_kg(mass, WXT, aer_particles):
+def convert_mass_to_kg_kg(mass, met):
 
     """
     Convert mass molecules from g m-3 to kg kg-1
 
     :param mass
-    :param WXT (for meteorological data)
+    :param met (for meteorological data - needs Tair and pressure)
     :param aer_particles (not all the keys in mass are the species, therefore only convert the species defined above)
     :return: mass_kg_kg: mass in kg kg-1 air
     """
 
-    # convert temperature to Kelvin
-    T_K = WXT['Tair'] + 273.15
-    p_Pa = WXT['press'] * 100.0
+    #
+    T_K = met['Tair'] # [K]
+    p_Pa = met['pressure'] # [Pa]
 
     # density of air [kg m-3] # assumes dry air atm
     # p = rho * R * T [K]
-    WXT['dryair_rho'] = p_Pa / (286.9 * T_K)
+    met['dryair_rho'] = p_Pa / (286.9 * T_K)
 
     # convert g m-3 air to kg kg-1 of air
     mass_kg_kg = {'time': mass['time']}
-    for aer_i in aer_particles:
-        mass_kg_kg[aer_i] = mass[aer_i] * 1e3 / WXT['dryair_rho']
+    for key in mass.iterkeys():
+        if key is not 'time':
+            mass_kg_kg[key] = mass[key] * 1e3 / met['dryair_rho']
 
-    return mass_kg_kg, WXT
+    return mass_kg_kg, met
 
-def OC_BC_interp_hourly(OC_BC_in):
+def oc_bc_interp_hourly(oc_bc_in):
 
     """
     Increase EC and OC data resolution from daily to hourly with a simple linear interpolation
 
-    :param OC_BC_in:
-    :return:OC_BC_hourly
+    :param oc_bc_in:
+    :return:oc_bc
     """
 
     # Increase to hourly resolution by linearly interpolate between the measurement times
-    date_range = eu.date_range(OC_BC_in['time'][0], OC_BC_in['time'][-1] + dt.timedelta(days=1), 60, 'minutes')
-    OC_BC_hourly = {'time': date_range,
+    date_range = eu.date_range(oc_bc_in['time'][0], oc_bc_in['time'][-1] + dt.timedelta(days=1), 60, 'minutes')
+    oc_bc = {'time': date_range,
                     'CORG': np.empty(len(date_range)),
                     'CBLK': np.empty(len(date_range))}
 
-    OC_BC_hourly['CORG'][:] = np.nan
-    OC_BC_hourly['CBLK'][:] = np.nan
+    oc_bc['CORG'][:] = np.nan
+    oc_bc['CBLK'][:] = np.nan
 
     # fill hourly data
     for aer_i in ['CORG', 'CBLK']:
 
         # for each day, spready data out into the hourly slots
         # do not include the last time, as it cannot be used as a start time (fullday)
-        for t, fullday in enumerate(OC_BC_in['time'][:-1]):
+        for t, fullday in enumerate(oc_bc_in['time'][:-1]):
 
             # start = fullday
             # end = fullday + dt.timedelta(days=1)
 
             # linearly interpolate between the two main dates
-            interp = np.linspace(OC_BC_in[aer_i][t], OC_BC_in[aer_i][t+1],24)
+            interp = np.linspace(oc_bc_in[aer_i][t], oc_bc_in[aer_i][t+1],24)
 
             # idx range as the datetimes are internally complete, therefore a number sequence can be used without np.where()
             idx = np.arange(((t+1)*24)-24, (t+1)*24)
 
             # put the values in
-            OC_BC_hourly[aer_i][idx] = interp
+            oc_bc[aer_i][idx] = interp
 
 
-    return OC_BC_hourly
+    return oc_bc
 
 ## aerosol physical properties besides mass
 
-def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT, radius_k, dN):
+def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, met, radius_k, dN):
 
     """
 
     :param aer_particles:
-    :param mass_kg_kg:
-    :param aer_density:
-    :param radius_k: dictionary with a float value for each aerosol (aer_i)
+    :param mass_kg_kg: [kg kg-1]
+    :param aer_density: [kg m-3]
+    :param radius_k: dictionary with a float value for each aerosol (aer_i) [m]
     :return:
     """
 
@@ -646,7 +827,7 @@ def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WX
     # calculate the number of particles for each species using radius_m and the mass
     num_part = {}
     for aer_i in aer_particles:
-        num_part[aer_i] = mass_kg_kg[aer_i] / ((4.0/3.0) * np.pi * (aer_density[aer_i]/WXT['dryair_rho']) * (radius_k[aer_i] ** 3.0))
+        num_part[aer_i] = mass_kg_kg[aer_i] / ((4.0/3.0) * np.pi * (aer_density[aer_i]/met['dryair_rho']) * (radius_k[aer_i] ** 3.0))
 
     # find relative N from N(mass, r_md)
     N_weight = {}
@@ -666,6 +847,42 @@ def est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WX
 
 
     return N_weight, num_conc
+
+def N_weights_from_pm_mass(aer_particles, mass_kg_kg, aer_density, met, radius_m):
+
+    """
+    N_weight calcuated from pm mass, to be used to weight the number distribution, dN.
+    :param aer_particles:
+    :param mass_kg_kg: [kg kg-1]
+    :param aer_density: [kg m-3]
+    :param radius_k: dictionary with a float value for each aerosol (aer_i) [m]
+    :return:
+    """
+
+    # work out Number concentration (relative weight) for each MAIN species as defined by aer_particles[m-3]
+    # calculate the number of particles for each species using radius_m and the mass
+    num_part = {}
+    for aer_i in aer_particles:
+        num_part[aer_i] = mass_kg_kg[aer_i] / ((4.0/3.0) * np.pi * (aer_density[aer_i]/met['dryair_rho']) * (radius_m[aer_i] ** 3.0))
+
+    # find relative N from N(mass, r_md)
+    N_weight = {}
+    #num_conc = {}
+    for aer_i in aer_particles:
+
+        # relative weighting of N for each species (aerosol_i / sum of all aerosol for each time)
+        # .shape(time,) - N_weight['CORG'] has many over 1
+        # was nansum but changed to just sum, so times with missing data are nan for all aerosols
+        #   only nans this data set thougha nd not the other data (e.g. pm10 and therefore misses pm1)
+        N_weight[aer_i] = num_part[aer_i] / np.sum(np.array(num_part.values()), axis=0)
+
+        # # estimated number for the species, from the main distribution data, using the weighting,
+        # #    for each time step
+        # num_conc[aer_i] = np.tile(N_weight[aer_i], (len(dN['med']),1)).transpose() * \
+        #                   np.tile(dN['med'], (len(N_weight[aer_i]),1))
+
+
+    return N_weight
 
 def calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density):
 
@@ -1109,8 +1326,15 @@ def main():
     # Setup
     # ==============================================================================
 
-    # use PM1 or PM10 data?
-    process_type = 'PM10-1'
+    # site information
+    site_ins = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine',
+            'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
+
+    # use PM1 or pm10 data?
+    process_type = 'pm10-2p5'
+
+    # which PM vars to read in (linked to the process type)
+    pm_vars = ['pm2p5', 'pm10']
 
     # soot or no soot? (1 = 'withSoot' or 0 = 'noSoot')
     soot_flag = 1
@@ -1141,7 +1365,7 @@ def main():
 
     # directories
     maindir = '/home/nerc/Documents/MieScatt/'
-    datadir = '/home/nerc/Documents/MieScatt/data/'
+    datadir = '/home/nerc/Documents/MieScatt/data/' + site_ins['site_long'] + '/'
 
     # save dir
     if Geisinger_subsample_flag == 1:
@@ -1153,7 +1377,7 @@ def main():
     savedir = maindir + 'figures/LidarRatio/' + savesubdir
 
     # data
-    wxtdatadir = datadir
+    #wxtdatadir = datadir
     massdatadir = datadir
     ffoc_gfdir = datadir
 
@@ -1161,14 +1385,13 @@ def main():
     picklesave = True
 
     # RH data
-    wxt_inst_site = 'WXT_KSSW'
+    #wxt_inst_site = 'WXT_KSSW'
 
     # data year
     year = '2016'
 
-    # site information
-    site_ins = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine',
-            'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
+    # resolution to average data to (in minutes! e.g. 60)
+    timeRes = 60
 
 
     # aerosol particles to calculate (OC = Organic carbon, CBLK = black carbon, both already measured)
@@ -1213,15 +1436,27 @@ def main():
         rn_pmlt1p0_m[key] = r * 1e-06
 
     # 2. D < 10 micron
-    # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
-    pm1t10_rv_microns = 1.9848902137534531 / 2.0
 
+    # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
+    rn_pm10_microns = 0.07478 / 2.0
     # turn units to meters and place an entry for each aerosol
-    pm1t10_rv_m = {}
+    rn_pm10_m = {}
     for key in rn_pmlt1p0_m.iterkeys():
-        pm1t10_rv_m[key] = pm1t10_rv_microns * 1.0e-6
+        rn_pm10_m[key] = rn_pm10_microns * 1.0e-6
+
+    # # old 2. D < 10 micron
+    # # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
+    # pm1t10_rv_microns = 1.9848902137534531 / 2.0
+    # # turn units to meters and place an entry for each aerosol
+    # pm1t10_rv_m = {}
+    # for key in rn_pmlt1p0_m.iterkeys():
+    #     pm1t10_rv_m[key] = pm1t10_rv_microns * 1.0e-6
+
+
+
 
     # 3. D < 2.5 microns
+    # calculated from Chilbolton data (SMPS + GRIMM 2016)
     rn_pmlt2p5_microns = 0.06752 / 2.0
 
     rn_pmlt2p5_m = {}
@@ -1229,6 +1464,7 @@ def main():
         rn_pmlt2p5_m[key] = rn_pmlt2p5_microns * 1.0e-6
 
     # 4. 2.5 < D < 10 microns
+    # calculated from Chilbolton data (SMPS + GRIMM 2016)
     rn_2p5_10_microns = 2.820 / 2.0
 
     rn_2p5_10_m = {}
@@ -1248,17 +1484,15 @@ def main():
     gf_ffoc = {'RH_frac': np.array(gf_ffoc_raw[:,0], dtype=float),
                 'GF': np.array(gf_ffoc_raw[:, 1], dtype=float)}
 
-    # Read WXT data
-    wxtfilepath = wxtdatadir + wxt_inst_site + '_' + year + '_15min.nc'
-    WXT_in = eu.netCDF_read(wxtfilepath, vars=['RH', 'Tair','press', 'time'])
-    WXT_in['RH_frac'] = WXT_in['RH'] * 0.01
-    WXT_in['time'] -= dt.timedelta(minutes=15) # change time from 'obs end' to 'start of obs', same as the other datasets
+    # # Read WXT data
+    # wxtfilepath = wxtdatadir + wxt_inst_site + '_' + year + '_15min.nc'
+    # RH_in = eu.netCDF_read(wxtfilepath, vars=['RH', 'Tair','press', 'time'])
+    # RH_in['RH_frac'] = WXT_in['RH'] * 0.01
+    # RH_in['time'] -= dt.timedelta(minutes=15) # change time from 'obs end' to 'start of obs', same as the other datasets
 
-    # # load in S data
-    # filename = datadir + 'pickle/' + 'S_woSoot_2016_equalWeight_lt60_PM10.pickle'
-    # with open(filename, 'rb') as handle:
-    #     S_loaded = pickle.load(handle)
 
+    ## Read in number distribution and RH data
+    # --------------------------------------------
     if site_ins['period'] == 'ClearfLo':
 
         # read in clearflo winter number distribution
@@ -1266,25 +1500,40 @@ def main():
         # !Note: will not work if pickle was saved using protocol=Highest... (for some unknown reason)
         filename = datadir + 'dN_dmps_aps_clearfloWinter_lt60_cut.pickle'
         with open(filename, 'rb') as handle:
-            dN = pickle.load(handle)
+            dN_in = pickle.load(handle)
 
         # increase N in the first 2 bins of APS data as these are small due to the the discrepency between DMPS and APS
         # measurements, as the first 3 APS bins are usually low and need to be corrected (Beddows et al ., 2010)
         for b in [520, 560]:
-            dN['binned'][:, dN['D'] == b] *= 2.0
+            dN_in['binned'][:, dN_in['D'] == b] *= 2.0
 
         # make a median distribution of dN
-        dN['med'] = np.nanmedian(dN['binned'], axis=0)
+        dN_in['med'] = np.nanmedian(dN_in['binned'], axis=0)
 
         # convert D and dD from nm to microns and meters separately, and keep the variables for clarity further down
         # these are the original bins from the dN data
-        r_d_orig_bins_microns = dN['D'] * 1e-03 / 2.0
-        r_d_orig_bins_m = dN['D'] * 1e-09 / 2.0
+        r_d_orig_bins_microns = dN_in['D'] * 1e-03 / 2.0
+        r_d_orig_bins_m = dN_in['D'] * 1e-09 / 2.0
 
+    if (site_ins['site_long'] == 'Chilbolton') & (year == '2016'):
+
+        # read in number distribution and RH from pickled data
+        filename = datadir + 'N_hourly_Ch_SMPS_GRIMM.pickle'
+        with open(filename, 'rb') as handle:
+            dN_in = pickle.load(handle)
+
+        # make sure datetimes are in UTC
+        zone = tz.gettz('UTC')
+        dN_in['time'] = np.array([i.replace(tzinfo=zone) for i in dN_in['time']])
+
+        # convert D and dD from nm to microns and meters separately, and keep the variables for clarity further down
+        # these are the original bins from the dN data
+        r_d_orig_bins_microns = dN_in['D'] * 1e-03 / 2.0
+        r_d_orig_bins_m = dN_in['D'] * 1e-09 / 2.0
 
     # interpolated r values to from the Geisinger et al 2017 approach
     # will increase the number of r bins to (number of r bins * n_samples)
-    R_dg_microns = Geisinger_increase_r_bins(dN, r_d_orig_bins_microns, n_samples=n_samples)
+    R_dg_microns = Geisinger_increase_r_bins(dN_in, r_d_orig_bins_microns, n_samples=n_samples)
     R_dg_m = R_dg_microns * 1.0e-06
 
     # which set of radius is going to be swollen?
@@ -1295,124 +1544,81 @@ def main():
         r_d_microns = r_d_orig_bins_microns
         r_d_m = r_d_orig_bins_m
 
-    # ---- pasted up to here ---- #
+    ## Read in species by mass data
+    # -----------------------------------------
 
-    # Read in species by mass data
-    if (process_type == 'PM1') | (process_type == 'PM10-1'):
+    if 'pm2p5' in pm_vars:
 
-        # Read in mass data [grams m-3]
-        # keep idx for rows that had missing data of the major species
-        PM1_mass_in, pm1_qaqc_idx = read_PM1_mass_data(massdatadir, year)
+        # Read in the PM2.5 data [grams m-3]
+        pm2p5_mass_in, _ = read_PM_mass_data(massdatadir, site_ins, 'PM2p5', year)
 
-        # Trim times
-        # as WXT and mass data are 15 mins and both line up exactly already
-        #   therefore trim WXT to match mass time
-        PM1_mass_in, WXT_in = trim_mass_wxt_times(PM1_mass_in, WXT_in)
 
-        # Time match so mass and WXT times line up INTERNALLY as well
-        date_range = np.array(eu.date_range(WXT_in['time'][0], WXT_in['time'][-1], 15, 'minutes'))
+    if 'pm10' in pm_vars:
 
-        # ToDo - these two are very time consuming, make it more efficient
-        # make sure there are no time stamp gaps in the data so mass and WXT will match up perfectly, timewise.
-        print 'beginning time matching for WXT...'
-        WXT_15min = internal_time_completion(WXT_in, date_range)
-        print 'end time matching for WXT...'
-
-        # same but for mass data
-        print 'beginning time matching for mass...'
-        PM1_mass = internal_time_completion(PM1_mass_in, date_range)
-        print 'end time matching for mass...'
-
-        WXT = WXT_15min
-
-    if (process_type == 'PM10') | (process_type == 'PM10-1'):
+        # Read in the hourly other pm10 data [grams m-3]
+        pm10_mass_in, _ = read_PM_mass_data(massdatadir, site_ins, 'PM10', year)
 
         # Read in the daily EC and OC data [grams m-3]
-        OC_BC_in = read_EC_BC_mass_data(massdatadir, year)
+        pm10_oc_bc_in = read_EC_BC_mass_data(massdatadir, site_ins, 'PM10', year)
 
         # linearly interpolate daily data to hourly
-        OC_BC_hourly = OC_BC_interp_hourly(OC_BC_in)
+        pm10_oc_bc_in = oc_bc_interp_hourly(pm10_oc_bc_in)
 
-        # Read in the hourly other PM10 data [grams m-3]
-        PM10_mass_in = read_PM10_mass_data(massdatadir, year)
+        # merge the pm10 data together and used RH to do it. RH and pm10 merged datasets will be in sync.
+        pm10_mass_in = merge_pm_mass(pm10_mass_in, pm10_oc_bc_in)
 
-        # average WXT data up to hourly
-        WXT_hourly = WXT_hourly_average(WXT_in)
 
-        # merge the PM10 data together and used RH to do it. RH and PM10 merged datasets will be in sync.
-        PM10_mass = merge_timematch_PM10_mass_RH(WXT_hourly, PM10_mass_in, OC_BC_hourly)
+    ## Read in meteorological data
+    if (site_ins['site_long'] == 'Chilbolton') & (year == '2016'):
 
-        WXT = WXT_hourly
-
-    if process_type == 'PM10-1':
-
-        # coarsen PM1 data from 15 min to hourly
-        PM1_mass_hourly = coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass)
-
-        # create pm10-1 mass
-        PM10m1_mass_hourly = {'time': PM1_mass_hourly['time']}
-        for key in PM1_mass_hourly.iterkeys():
-            if key != 'time':
-                PM10m1_mass_hourly[key] = PM10_mass[key] - PM1_mass_hourly[key]
-
-                # PM10 - PM1 is not always >0, as the two instruments are different.
-                #   Therefore np.nan all negative masses!
-                idx = np.where(PM10m1_mass_hourly[key] < 0)
-                PM10m1_mass_hourly[key][idx] = np.nan
-
-        # ToDo make this more efficient...
-        # data: PM10m1_mass_hourly, PM1_mass_hourly (will be raw input, no aerosols just yet!)
-        # remove all aerosol values for rows that have any nans
-        for pm10_set in [PM10m1_mass_hourly, PM1_mass_hourly, PM10_mass]:
-            for part_i in orig_particles:
-                bools = np.isnan(pm10_set[part_i])
-
-                # turn all the part_i variables at the same time into nans
-                for key in orig_particles:
-                    PM10m1_mass_hourly[key][bools] = np.nan
-                    PM1_mass_hourly[key][bools] = np.nan
-                    PM10_mass[key][bools] = np.nan
+        # RH, Tair and pressure data was bundled with the dN data, so extract out here to make it clearly separate.
+        met_in = {'time': dN_in['time'], 'RH': dN_in['RH'], 'Tair': dN_in['Tair'], 'pressure': dN_in['pressure']}
 
 
 
     # ==============================================================================
-    # Process data
+    # Time match processing
     # ==============================================================================
 
-    if process_type == 'PM1':
-        # calculate the moles and the mass [kg kg-1] from mass [g cm-3] and WXT data
-        moles, mass_kg_kg = calculate_moles_masses(PM1_mass, WXT_15min, aer_particles, inc_soot=soot_flag)
 
-        # work out Number concentration (relative weight) for each species
-        # calculate the number of particles for each species using radius_m and the mass
-        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_15min, rn_pmlt1p0_m, dN)
+    # time match and allign pm2.5, pm10, RH and dN data
+    #   average up data to the same time resolution, according to timeRes
+    pm2p5_mass, pm10_mass, met, dN = time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes)
 
-    elif process_type == 'PM10':
+    # ToDo - Need to set nan any instances in time where any of the data is missing e.g. is SMPS is missing
 
-        moles, mass_kg_kg = calculate_moles_masses(PM10_mass, WXT_hourly, aer_particles, inc_soot=soot_flag)
-        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_hourly, rn_pmlt1p0_m, dN)
-
-    elif process_type == 'PM10-1':
+    # ==============================================================================
+    # Main processing and calculations
+    # ==============================================================================
 
 
-        # PM1 first
-        moles, pm1_mass_kg_kg = calculate_moles_masses(PM1_mass_hourly, WXT_hourly, aer_particles, inc_soot=soot_flag)
-        N_weight_pm1, num_conc_pm1 = est_num_conc_by_species_for_Ndist(aer_particles, pm1_mass_kg_kg, aer_density, WXT_hourly, rn_pmlt1p0_m, dN)
+    if process_type == 'pm10-2p5':
+
+        # create pm10-2p5
+        pm10m2p5_mass = two_pm_dataset_difference(pm2p5_mass, pm10_mass)
 
 
-        # PM10-1 second
-        moles, pm10m1_mass_kg_kg = calculate_moles_masses(PM10m1_mass_hourly, WXT_hourly, aer_particles, inc_soot=soot_flag)
-        N_weight_pm10m1, num_conc_pm10m1 = est_num_conc_by_species_for_Ndist(aer_particles, pm10m1_mass_kg_kg, aer_density, WXT_hourly, pm1t10_rv_m, dN)
+        # calculate the moles and the mass [kg kg-1] from mass [g cm-3] and met data for pm2p5, pm10-2.5 and pm10
+        pm2p5_moles, pm2p5_mass_kg_kg = calculate_moles_masses(pm2p5_mass, met, aer_particles, inc_soot=soot_flag)
+        pm10m2p5_moles,   pm10m2p5_mass_kg_kg = calculate_moles_masses(pm10m2p5_mass, met, aer_particles, inc_soot=soot_flag)
+        pm10_moles,   pm10_mass_kg_kg = calculate_moles_masses(pm10_mass, met, aer_particles, inc_soot=soot_flag)
 
-        # PM10 - PM1 (use the right parts of the num concentration for the rbins e.g. pm1 mass for r<1, pm10-1 for r>1)
-        idx_pm1 = np.where(dN['D'] <= 1000.0)[0] # 'D' is in nm not microns!
-        idx_pm10m1 = np.where(dN['D'] > 1000.0)[0]
+        # calculate N_weights for each species so the weights can be applied afterwards
+        N_weight_pm2p5 = N_weights_from_pm_mass(aer_particles, pm2p5_mass_kg_kg, aer_density, met, rn_pmlt2p5_m)
+        N_weight_pm10m2p5 = N_weights_from_pm_mass(aer_particles, pm10m2p5_mass_kg_kg, aer_density, met, rn_2p5_10_m)
+        N_weight_pm10 = N_weights_from_pm_mass(aer_particles, pm10_mass_kg_kg, aer_density, met, rn_pm10_m)
 
-        # concatonate num_conc
-        # r<=1 micron are weighted by PM1, r>1 are weighted by PM10-1
-        num_conc = {}
-        for aer_i in num_conc_pm1.iterkeys():
-            num_conc[aer_i] = np.hstack((num_conc_pm1[aer_i][:, idx_pm1], num_conc_pm10m1[aer_i][:, idx_pm10m1]))
+
+        # old way doing N_weight and applying the weight to get the num_conc at the same time
+        # N_weight_pm2p5, num_conc_pm2p5 = est_num_conc_by_species_for_Ndist(aer_particles, pm2p5_mass_kg_kg, aer_density, met, rn_pmlt2p5_m, dN)
+        # N_weight_pm10m2p5, num_conc_pm10m2p5 = est_num_conc_by_species_for_Ndist(aer_particles, pm10m2p5_mass_kg_kg, aer_density, met, rn_2p5_10_m, dN)
+        # N_weight_pm10, num_conc_pm10 = est_num_conc_by_species_for_Ndist(aer_particles, pm10_mass_kg_kg, aer_density, met, rn_10_m, dN)
+
+        # merge the two num_conc datasets together
+        limit = 2500.0 # [nm]
+        num_conc, idx_pm2p5, idx_pm10m2p5 = merge_two_pm_dataset_num_conc(num_conc_pm2p5, num_conc_pm10m2p5, dN, limit)
+
+
 
 
     # calculate dry volume from the mass of each species
@@ -1425,7 +1631,7 @@ def main():
     r_md = {}
 
     # create a r_d_microns_dry_dup (rbins copied for each time, t) to help with calculations
-    r_d_microns_dup = np.tile(r_d_microns, (len(WXT['time']), 1))
+    r_d_microns_dup = np.tile(r_d_microns, (len(met['time']), 1))
 
     # calculate the swollen particle size for these three aerosol types
     # Follows CLASSIC guidence, based off of Fitzgerald (1975)
@@ -1439,7 +1645,7 @@ def main():
 
     # make r_md['CBLK'] nan for all sizes, for times t, if mass data is not present for time t
     # doesn't matter which mass is used, as all mass data have been corrected for if nans were present in other datasets
-    r_md['CBLK'][np.isnan(PM10m1_mass_hourly['CBLK']), :] = np.nan
+    r_md['CBLK'][np.isnan(pm10m1_mass_hourly['CBLK']), :] = np.nan
 
     # calculate r_md for organic carbon using the MO empirically fitted g(RH) curves
     r_md['CORG'] = np.empty((len(WXT['time']), len(r_d_microns)))
@@ -1492,12 +1698,12 @@ def main():
 
         if process_type == 'PM1':
                 WXT = WXT_15min
-        elif process_type == 'PM10':
+        elif process_type == 'pm10':
                 WXT = WXT_hourly
-        elif process_type == 'PM10-1':
-                mass_kg_kg = {'PM1': pm10m1_mass_kg_kg, 'PM10-1': pm10m1_mass_kg_kg}
+        elif process_type == 'pm10-1':
+                mass_kg_kg = {'PM1': pm10m1_mass_kg_kg, 'pm10-1': pm10m1_mass_kg_kg}
                 WXT = WXT_hourly
-                N_weight = {'PM1': N_weight_pm1,'PM10-1': N_weight_pm10m1}
+                N_weight = {'PM1': N_weight_pm1,'pm10-1': N_weight_pm10m1}
 
 
         pickle_save = {'optics': optics, 'WXT':WXT, 'N_weight': N_weight,
