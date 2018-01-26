@@ -1614,9 +1614,9 @@ def main():
         # N_weight_pm10m2p5, num_conc_pm10m2p5 = est_num_conc_by_species_for_Ndist(aer_particles, pm10m2p5_mass_kg_kg, aer_density, met, rn_2p5_10_m, dN)
         # N_weight_pm10, num_conc_pm10 = est_num_conc_by_species_for_Ndist(aer_particles, pm10_mass_kg_kg, aer_density, met, rn_10_m, dN)
 
-        # merge the two num_conc datasets together
-        limit = 2500.0 # [nm]
-        num_conc, idx_pm2p5, idx_pm10m2p5 = merge_two_pm_dataset_num_conc(num_conc_pm2p5, num_conc_pm10m2p5, dN, limit)
+        # # merge the two num_conc datasets together
+        # limit = 2500.0 # [nm]
+        # num_conc, idx_pm2p5, idx_pm10m2p5 = merge_two_pm_dataset_num_conc(num_conc_pm2p5, num_conc_pm10m2p5, dN, limit)
 
 
 
@@ -1624,8 +1624,14 @@ def main():
     # calculate dry volume from the mass of each species
     # V_dry_from_mass = calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density)
 
+    # ==============================================================================
+    # Swelling / drying particles
+    # ==============================================================================
+
     # ---------------------------------------------------------
     # Swell the particles (r_md,aer_i) [microns]
+
+    # ToDo - use smps_idx and grimm_idx in the dN variable to swell and dry the right particles
 
     # set up dictionary
     r_md = {}
