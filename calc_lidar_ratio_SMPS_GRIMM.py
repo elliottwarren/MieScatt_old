@@ -320,6 +320,8 @@ def Geisinger_increase_r_bins(dN, r_d_orig_bins_microns, n_samples=4.0):
     :param r_d_orig_bins_microns:
     :param n_samples:
     :return: R_dg_microns
+    :return: dN (with geisinger_idx) - which interpolated bin came from what instruments original diameters.
+                        Need to be able to split which diameters need swelling and which need shrinking.
     """
 
     # get bin edges based on the current bins (R_da is lower, R_db is upper edge)
@@ -331,11 +333,18 @@ def Geisinger_increase_r_bins(dN, r_d_orig_bins_microns, n_samples=4.0):
                      for i in range(len(r_d_orig_bins_microns))
                      for g in range(1,int(n_samples)+1)])
 
+    # add the idx positions for the geisinger bins that came from each instrument to dN
+    #   checked using smps and grimm from Chilbolton
+    #   smps_orginal = 0 to 50, grimm_original = 51 to 74
+    #   therefore, smps_geisinger = 0 to 203, grimm_geisinger = 204 to 299 (with smps + grimm total being 300 positions)
+    #   all idx positions above are inclusive ranges
+    dN['smps_geisinger_idx'] = np.arange(dN['smps_idx'][0] * int(n_samples), (dN['smps_idx'][-1] + 1) * int(n_samples))
+    dN['grimm_geisinger_idx'] = np.arange(dN['grimm_idx'][0] * int(n_samples), (dN['grimm_idx'][-1] + 1) * int(n_samples))
 
     # convert to microns from nanometers
     R_dg_microns = R_dg * 1e-3
 
-    return R_dg_microns
+    return R_dg_microns, dN
 
 def WXT_hourly_average(WXT_in):
 
@@ -539,7 +548,7 @@ def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
     # set up dictionaries (just with time at the moment)
     pm2p5_mass = {'time': time_range}
     pm10_mass = {'time': time_range}
-    dN = {'time': time_range, 'D': dN_in['D'], 'dD': dN_in['dD']}
+    dN = {'time': time_range, 'D': dN_in['D'], 'dD': dN_in['dD'], 'grimm_idx': dN_in['grimm_idx'], 'smps_idx': dN_in['smps_idx']}
     met = {'time': time_range}
 
     ## 2. set up empty arrays within dictionaries
@@ -548,7 +557,7 @@ def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
 
         for key in var_in.iterkeys():
             # only fill up the variables
-            if key not in ['time', 'D', 'dD']:
+            if key not in ['time', 'D', 'dD', 'grimm_idx', 'smps_idx']:
 
                 # make sure the dimensions of the arrays are ok. Will either be 1D (e.g RH) or 2D (e.g. dN)
                 dims = var_in[key].ndim
@@ -580,7 +589,7 @@ def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
 
             # create means of the data for this time period
             for key in var.iterkeys():
-                if key not in ['time', 'D', 'dD']:
+                if key not in ['time', 'D', 'dD', 'grimm_idx', 'smps_idx']:
 
                     dims = var_in[key].ndim
                     if dims == 1:
@@ -909,13 +918,13 @@ def calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density):
 
 ## swelling
 
-def calc_r_md_species(r_d_microns, WXT, aer_i):
+def calc_r_md_species(r_d_microns, met, aer_i):
 
     """
     Calculate the r_md [microns] for all particles, given the RH [fraction] and what species
 
     :param r_d_microns:
-    :param WXT: (needed for RH)
+    :param met: meteorological variables (needed for RH and time)
     :param aer_i:
     :return: r_md_t: swollen radii at time, t
 
@@ -954,13 +963,15 @@ def calc_r_md_species(r_d_microns, WXT, aer_i):
 
 
     # duplicate the range of radii to multiple rows, one for each RH - shape(time, rbin).
-    r_d_microns_dup = np.tile(r_d_microns, (len(WXT['time']), 1))
+    # Remember: the number in each diameter bin might change, but the bin diameters themselves will not.
+    #   Therefore this approach works for constant and time varying number distirbutions.
+    r_d_microns_dup = np.tile(r_d_microns, (len(met['time']), 1))
 
     # Set up array for aerosol
-    r_md =  np.empty(len(WXT['time']))
+    r_md =  np.empty(len(met['time']))
     r_md[:] = np.nan
 
-    phi = np.empty(len(WXT['time']))
+    phi = np.empty(len(met['time']))
     phi[:] = np.nan
 
     # limits for what approach to use, depending on the RH
@@ -998,12 +1009,12 @@ def calc_r_md_species(r_d_microns, WXT, aer_i):
     # bool = np.logical_and(WXT['RH_frac'] >= rh_del, WXT['RH_frac'] <= rh_cap)
     # rh_bet_del_cap = np.where(bool == True)[0]
 
-    beta = np.exp((0.00077 * WXT['RH_frac'])/(1.009 - WXT['RH_frac']))
-    rh_lt_97 = WXT['RH_frac'] < 0.97
+    beta = np.exp((0.00077 * met['RH_frac'])/(1.009 - met['RH_frac']))
+    rh_lt_97 = met['RH_frac'] < 0.97
     phi[rh_lt_97] = 1.058
-    phi[~rh_lt_97] = 1.058 - ((0.0155 * (WXT['RH_frac'][~rh_lt_97] - 0.97))
-                              /(1.02 - (WXT['RH_frac'][~rh_lt_97] ** 1.4)))
-    alpha = 1.2 * np.exp((0.066 * WXT['RH_frac'])/ (phi - WXT['RH_frac']))
+    phi[~rh_lt_97] = 1.058 - ((0.0155 * (met['RH_frac'][~rh_lt_97] - 0.97))
+                              /(1.02 - (met['RH_frac'][~rh_lt_97] ** 1.4)))
+    alpha = 1.2 * np.exp((0.066 * met['RH_frac'])/ (phi - met['RH_frac']))
 
     # duplicate values across to all radii bins to help r_md = .. calculation: alpha_dup.shape = (time, rbin)
     alpha_dup = np.tile(alpha, (len(r_d_microns), 1)).transpose()
@@ -1015,13 +1026,13 @@ def calc_r_md_species(r_d_microns, WXT, aer_i):
 
     # set all r_md(RH>99.5%) to r_md(RH=99.5%) to prevent growth rates inconsistent with impirical equation.
     # replace all r_md values above 0.995 with 0.995
-    rh_gt_cap = WXT['RH_frac'] > rh_cap
+    rh_gt_cap = met['RH_frac'] > rh_cap
     r_md[rh_gt_cap, :] = calc_r_md_t(r_d_microns, rh_cap, alpha_factor)
 
     # --- 0 to efflorescence --- #
 
     # below efflorescence point (0.3 for sulhate, r_md = r_d)
-    rh_lt_eff = WXT['RH_frac'] <= rh_eff
+    rh_lt_eff = met['RH_frac'] <= rh_eff
     r_md[rh_lt_eff, :] = r_d_microns
 
     # ------ efflorescence to deliquescence ----------#
@@ -1030,7 +1041,7 @@ def calc_r_md_species(r_d_microns, WXT, aer_i):
     r_md_del = calc_r_md_t(r_d_microns, rh_del, alpha_factor)
 
     # all values that need to have some linear interpolation
-    bool = np.logical_and(WXT['RH_frac'] >= rh_eff, WXT['RH_frac'] <= rh_del)
+    bool = np.logical_and(met['RH_frac'] >= rh_eff, met['RH_frac'] <= rh_del)
     rh_bet_eff_del = np.where(bool == True)[0]
 
     # between efflorescence point and deliquescence point, r_md is expected to value linearly between the two
@@ -1046,7 +1057,7 @@ def calc_r_md_species(r_d_microns, WXT, aer_i):
     # find distance rh is along linear interpolation [fraction] from lower limit
     # frac = np.empty(len(r_md))
     # frac[:] = np.nan
-    frac = ((WXT['RH_frac'][rh_bet_eff_del] - low_rh) / diff_rh)
+    frac = ((met['RH_frac'][rh_bet_eff_del] - low_rh) / diff_rh)
 
     # duplicate abs_diff_r_md by the number of instances needing to be interpolated - helps the calculation below
     #   of r_md = ...low + (frac * abs diff)
@@ -1528,21 +1539,23 @@ def main():
 
         # convert D and dD from nm to microns and meters separately, and keep the variables for clarity further down
         # these are the original bins from the dN data
-        r_d_orig_bins_microns = dN_in['D'] * 1e-03 / 2.0
-        r_d_orig_bins_m = dN_in['D'] * 1e-09 / 2.0
+        r_orig_bins_microns = dN_in['D'] * 1e-03 / 2.0
+        r_orig_bins_m = dN_in['D'] * 1e-09 / 2.0
 
     # interpolated r values to from the Geisinger et al 2017 approach
     # will increase the number of r bins to (number of r bins * n_samples)
-    R_dg_microns = Geisinger_increase_r_bins(dN_in, r_d_orig_bins_microns, n_samples=n_samples)
+    R_dg_microns, dN_in = Geisinger_increase_r_bins(dN_in, r_orig_bins_microns, n_samples=n_samples)
     R_dg_m = R_dg_microns * 1.0e-06
 
-    # which set of radius is going to be swollen?
+    # which set of radius is going to be swollen/dried?
+    #   flag set True = interpolated bins
+    #   flag set False = original diameter bins
     if Geisinger_subsample_flag == 1:
-        r_d_microns = R_dg_microns
-        r_d_m = R_dg_m
+        r_microns = R_dg_microns
+        r_m = R_dg_m
     else:
-        r_d_microns = r_d_orig_bins_microns
-        r_d_m = r_d_orig_bins_m
+        r_microns = r_d_orig_bins_microns
+        r_m = r_d_orig_bins_m
 
     ## Read in species by mass data
     # -----------------------------------------
@@ -1604,8 +1617,8 @@ def main():
         pm10_moles,   pm10_mass_kg_kg = calculate_moles_masses(pm10_mass, met, aer_particles, inc_soot=soot_flag)
 
         # calculate N_weights for each species so the weights can be applied afterwards
-        N_weight_pm2p5 = N_weights_from_pm_mass(aer_particles, pm2p5_mass_kg_kg, aer_density, met, rn_pmlt2p5_m)
-        N_weight_pm10m2p5 = N_weights_from_pm_mass(aer_particles, pm10m2p5_mass_kg_kg, aer_density, met, rn_2p5_10_m)
+        #N_weight_pm2p5 = N_weights_from_pm_mass(aer_particles, pm2p5_mass_kg_kg, aer_density, met, rn_pmlt2p5_m)
+        #N_weight_pm10m2p5 = N_weights_from_pm_mass(aer_particles, pm10m2p5_mass_kg_kg, aer_density, met, rn_2p5_10_m)
         N_weight_pm10 = N_weights_from_pm_mass(aer_particles, pm10_mass_kg_kg, aer_density, met, rn_pm10_m)
 
 
@@ -1629,42 +1642,51 @@ def main():
     # ==============================================================================
 
     # ---------------------------------------------------------
-    # Swell the particles (r_md,aer_i) [microns]
+    # Swell the smps particles (r_md,aer_i) [microns]
 
     # ToDo - use smps_idx and grimm_idx in the dN variable to swell and dry the right particles
 
     # set up dictionary
     r_md = {}
 
-    # create a r_d_microns_dry_dup (rbins copied for each time, t) to help with calculations
-    r_d_microns_dup = np.tile(r_d_microns, (len(met['time']), 1))
 
     # calculate the swollen particle size for these three aerosol types
     # Follows CLASSIC guidence, based off of Fitzgerald (1975)
     # guidance requires radii units to be microns
     for aer_i in ['(NH4)2SO4', 'NH4NO3', 'NaCl']:
-        r_md[aer_i] = calc_r_md_species(r_d_microns, WXT, aer_i)
+        r_md[aer_i] = calc_r_md_species(r_d_microns, met, aer_i)
 
     # set r_md for black carbon as r_d, assuming black carbon is completely hydrophobic
-    # r_md['CBLK'] = np.empty((len(date_range), len(r_d_microns)))
-    r_md['CBLK'] = r_d_microns_dup
+    # create a r_d_microns_dry_dup (rbins copied for each time, t) to help with calculations
+    r_md['CBLK'] = np.tile(r_d_microns, (len(met['time']), 1))
 
     # make r_md['CBLK'] nan for all sizes, for times t, if mass data is not present for time t
     # doesn't matter which mass is used, as all mass data have been corrected for if nans were present in other datasets
-    r_md['CBLK'][np.isnan(pm10m1_mass_hourly['CBLK']), :] = np.nan
+    r_md['CBLK'][np.isnan(pm10_mass['CBLK']), :] = np.nan
 
     # calculate r_md for organic carbon using the MO empirically fitted g(RH) curves
-    r_md['CORG'] = np.empty((len(WXT['time']), len(r_d_microns)))
+    r_md['CORG'] = np.empty((len(met['time']), len(r_d_microns)))
     r_md['CORG'][:] = np.nan
-    for t, time_t in enumerate(WXT['time']):
+    for t, time_t in enumerate(met['time']):
 
-        _, idx, _ = eu.nearest(gf_ffoc['RH_frac'], WXT['RH_frac'][t])
+        _, idx, _ = eu.nearest(gf_ffoc['RH_frac'], met['RH_frac'][t])
         r_md['CORG'][t, :] = r_d_microns * gf_ffoc['GF'][idx]
 
     # convert r_md units from microns to meters
     r_md_m = {}
     for aer_i in aer_particles:
         r_md_m[aer_i] = r_md[aer_i] * 1e-06
+
+
+    # -----------------------------------------------------------
+
+    # Dry particles
+
+    # dry amm nit. sulph and salt
+    # keep BC the same
+    # dry CORG using the GFs
+
+
 
     # -----------------------------------------------------------
 
@@ -1691,9 +1713,9 @@ def main():
 
     if Geisinger_subsample_flag == 0:
         # The main beast. Calculate all the optical properties, and outputs the lidar ratio
-        optics = calculate_lidar_ratio(aer_particles, WXT['time'], ceil_lambda, r_md_m,  n_wet, num_conc)
+        optics = calculate_lidar_ratio(aer_particles, met['time'], ceil_lambda, r_md_m,  n_wet, num_conc)
     else:
-        optics = calculate_lidar_ratio_geisinger(aer_particles, WXT['time'], ceil_lambda, r_md_m,  n_wet, num_conc,
+        optics = calculate_lidar_ratio_geisinger(aer_particles, met['time'], ceil_lambda, r_md_m,  n_wet, num_conc,
                                     n_samples, r_d_orig_bins_m)
 
     # extract out the lidar ratio
@@ -1720,7 +1742,7 @@ def main():
     # get mean and nanstd from data
     # set up the date range to fill (e.g. want daily statistics then stats_date_range = daily resolution)
     # stats = eu.simple_statistics(S, date_range, stats_date_range, np.nanmean, np.nanstd, np.nanmedian)
-    stats_date_range = np.array(eu.date_range(WXT['time'][0], WXT['time'][-1] + dt.timedelta(days=1), 1, 'days'))
+    stats_date_range = np.array(eu.date_range(met['time'][0], met['time'][-1] + dt.timedelta(days=1), 1, 'days'))
 
     stats ={}
     # S_keep = deepcopy(S)
@@ -1734,7 +1756,7 @@ def main():
     for t, start, end in zip(np.arange(len(stats_date_range[:-1])), stats_date_range[:-1], stats_date_range[1:]):
 
         # get location of time period's data
-        bool = np.logical_and(WXT['time'] >=start, WXT['time']<=end)
+        bool = np.logical_and(met['time'] >=start, met['time']<=end)
 
         # extract data
         subsample = S[bool]
@@ -1775,7 +1797,7 @@ def main():
     # TIMESERIES - S - not binned
     # plot all the S in raw form (plot_date)
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
-    ax.plot_date(WXT['time'], S, fmt='-')
+    ax.plot_date(met['time'], S, fmt='-')
     plt.suptitle('Lidar Ratio:\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Date [dd/mm]')
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
