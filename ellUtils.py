@@ -553,7 +553,7 @@ def date_range(start_date, end_date, increment, period):
     while nxt <= end_date:
         result.append(nxt)
         nxt += delta
-    return result
+    return np.array(result)
 
 def time_to_datetime(tstr, timeRaw):
 
