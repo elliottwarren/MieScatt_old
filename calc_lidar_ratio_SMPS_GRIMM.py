@@ -3,6 +3,9 @@ Read in mass and number distribution data from Chilbolton to calculate the Lidar
 
 Created by Elliott Tues 23 Jan
 Taken from calc_lidar_ratio_numdist.py
+
+Variables and their units are paird together in comments with the units in square brackets i.e.
+variable [units]
 """
 
 import matplotlib.pyplot as plt
@@ -545,7 +548,7 @@ def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
     time_range = np.array([i.replace(tzinfo=from_zone) for i in time_range])
 
 
-    # set up dictionaries (just with time at the moment)
+    # set up dictionaries (just with time and any non-time related values at the moment)
     pm2p5_mass = {'time': time_range}
     pm10_mass = {'time': time_range}
     dN = {'time': time_range, 'D': dN_in['D'], 'dD': dN_in['dD'], 'grimm_idx': dN_in['grimm_idx'], 'smps_idx': dN_in['smps_idx']}
@@ -581,21 +584,21 @@ def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
 
 
             # find data for this time
-            binary = np.logical_and(var_in['time'][skip_idx:skip_idx+150] > time_range[t],
-                                    var_in['time'][skip_idx:skip_idx+150] <= time_range[t] + dt.timedelta(minutes=timeRes))
+            binary = np.logical_and(var_in['time'][skip_idx:skip_idx+100] > time_range[t],
+                                    var_in['time'][skip_idx:skip_idx+100] <= time_range[t] + dt.timedelta(minutes=timeRes))
 
             # actual idx of the data within the entire array
             skip_idx_set_i = np.where(binary == True)[0] + skip_idx
 
             # create means of the data for this time period
             for key in var.iterkeys():
-                if key not in ['time', 'D', 'dD', 'grimm_idx', 'smps_idx']:
+                if key not in ['time', 'D', 'dD', 'grimm_idx', 'grimm_geisinger_idx', 'smps_idx', 'smps_geisinger_idx']:
 
                     dims = var_in[key].ndim
                     if dims == 1:
                         var[key][t] = np.nanmean(var_in[key][skip_idx_set_i])
                     else:
-                        var[key][t, :] = np.nanmean(var_in[key][skip_idx_set_i, :])
+                        var[key][t, :] = np.nanmean(var_in[key][skip_idx_set_i, :], axis=0)
 
             # change the skip_idx for the next loop to start just after where last idx finished
             if skip_idx_set_i.size != 0:
@@ -916,12 +919,67 @@ def calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density):
 
     return V_dry_from_mass
 
-## swelling
+## swelling / drying
+
+def calc_r_md_all(r_microns, met, pm_mass, gf_ffoc):
+
+    """
+    Swell the diameter bins for a set list of aerosol species below:
+    ['(NH4)2SO4', 'NH4NO3', 'NaCl', 'CBLK', 'CORG']
+
+    :param r_microns:
+    :param met:
+    :param pm_mass:
+    :param gf_ffoc:
+    :return: r_md [microns]
+    :return r_md_m [meters]
+    """
+
+    # set up dictionary
+    r_md = {}
+
+    ## 1. ['(NH4)2SO4', 'NH4NO3', 'NaCl']
+
+    # calculate the swollen particle size for these three aerosol types
+    # Follows CLASSIC guidence, based off of Fitzgerald (1975)
+    # guidance requires radii units to be microns
+    for aer_i in ['(NH4)2SO4', 'NH4NO3', 'NaCl']:
+        r_md[aer_i] = calc_r_md_species(r_microns, met, aer_i)
+
+    ## 2. Black carbon ('CBLK')
+
+    # set r_md for black carbon as r_d, assuming black carbon is completely hydrophobic
+    # create a r_d_microns_dry_dup (rbins copied for each time, t) to help with calculations
+    r_md['CBLK'] = np.tile(r_microns, (len(met['time']), 1))
+
+    # make r_md['CBLK'] nan for all sizes, for times t, if mass data is not present for time t
+    # doesn't matter which mass is used, as all mass data have been corrected for if nans were present in other datasets
+    r_md['CBLK'][np.isnan(pm_mass['CBLK']), :] = np.nan
+
+    ## 3. Organic carbon ('CORG')
+
+    # calculate r_md for organic carbon using the MO empirically fitted g(RH) curves
+    r_md['CORG'] = np.empty((len(met['time']), len(r_microns)))
+    r_md['CORG'][:] = np.nan
+    for t, time_t in enumerate(met['time']):
+
+        _, idx, _ = eu.nearest(gf_ffoc['RH_frac'], met['RH_frac'][t])
+        r_md['CORG'][t, :] = r_microns * gf_ffoc['GF'][idx]
+
+
+    # convert r_md units from microns to meters
+    r_md_m = {}
+    for aer_i in r_md.iterkeys():
+        r_md_m[aer_i] = r_md[aer_i] * 1e-06
+
+
+    return r_md, r_md_m
 
 def calc_r_md_species(r_d_microns, met, aer_i):
 
     """
     Calculate the r_md [microns] for all particles, given the RH [fraction] and what species
+    Swells particles from a dry radius
 
     :param r_d_microns:
     :param met: meteorological variables (needed for RH and time)
@@ -1068,6 +1126,220 @@ def calc_r_md_species(r_d_microns, met, aer_i):
     r_md[rh_bet_eff_del, :] = low_r_md + (frac_dup * abs_diff_r_md_dup)
 
     return r_md
+
+def calc_r_d_all(r_microns, met, pm_mass, gf_ffoc):
+
+    """
+    Calculate r_d [microns] for all particles, given the RH [fraction] and what species
+    Dries particles from a wet radius
+
+    :param r_d_microns:
+    :param met: meteorological variables (needed for RH and time)
+    :param aer_i:
+    :return: r_d: dry radii [mircons]
+    :return r_d_m dry radii [meters]
+
+    Currently just works for ammonium sulphate, ammonium nitrate and NaCl
+    04/12/17 - works for range of r values, not just a scaler.
+    """
+
+    # set up dictionary
+    r_d = {}
+
+
+    # calculate the dry particle size for these three aerosol types
+    # Follows CLASSIC guidence, based off of Fitzgerald (1975)
+    # guidance requires radii units to be microns
+    # had to be reverse calculated from CLASSIC guidence.
+    for aer_i in ['(NH4)2SO4', 'NH4NO3', 'NaCl']:
+        r_d[aer_i] = calc_r_d_species(r_microns, met, aer_i)
+
+    # set r_d for black carbon as r_d, assuming black carbon is completely hydrophobic
+    # create a r_d_microns_dry_dup (rbins copied for each time, t) to help with calculations
+    r_d['CBLK'] = np.tile(r_microns, (len(met['time']), 1))
+
+    # make r_d['CBLK'] nan for all sizes, for times t, if mass data is not present for time t
+    # doesn't matter which mass is used, as all mass data have been corrected for if nans were present in other datasets
+    r_d['CBLK'][np.isnan(pm_mass['CBLK']), :] = np.nan
+
+    # calculate r_d for organic carbon using the MO empirically fitted g(RH) curves
+    r_d['CORG'] = np.empty((len(met['time']), len(r_microns)))
+    r_d['CORG'][:] = np.nan
+    for t, time_t in enumerate(met['time']):
+
+        _, idx, _ = eu.nearest(gf_ffoc['RH_frac'], met['RH_frac'][t])
+        r_d['CORG'][t, :] = r_microns / gf_ffoc['GF'][idx]
+
+    # convert r_md units from microns to meters
+    r_d_m = {}
+    for aer_i in r_d.iterkeys():
+        r_d_m[aer_i] = r_d[aer_i] * 1e-06
+
+
+    return r_d, r_d_m
+
+def calc_r_d_species(r_microns, met, aer_i):
+
+    """
+    Calculate the r_md [microns] for all particles, given the RH [fraction] and what species
+    dries particles
+
+    :param r_microns:
+    :param met: meteorological variables (needed for RH and time)
+    :param aer_i:
+    :return: r_md_t: swollen radii at time, t
+
+    Currently just works for ammonium sulphate, ammonium nitrate and NaCl
+    04/12/17 - works for range of r values, not just a scaler.
+    """
+
+
+    # calulate r_md based on Fitzgerald (1975) eqn 8 - 10
+    def calc_r_d_t(r_md_microns, rh_i, alpha_factor):
+
+        """
+        Calculate r_md for a single value of rh (rh_i) at a time t (alpha and beta will be applied to all rbins)
+        :param rh_i:
+        :param r_d_microns: NOt the duplicated array!
+        :return: r_md_i
+
+
+        The r_md calculated here will be for a fixed RH, therefore the single row of r_d_microns will be fine, as it
+        will compute a single set of r_md as a result.
+        """
+
+        # beta
+        beta = np.exp((0.00077 * rh_i) / (1.009 - rh_i))
+
+        # alpha
+        if rh_i < 0.97:
+            phi = 1.058 - ((0.0155 * (rh_i - 0.97))
+                           / (1.02 - (rh_i ** 1.4)))
+        else:
+            phi = 1.058
+
+        alpha = 1.2 * np.exp((0.066 * rh_i) / (phi - rh_i))
+
+        # alpha factor comes from the Table 1 in Fitzgerald (1975) to be used with some other aerosol types
+        # original -> r_md_t = alpha_factor * alpha * (r_d_microns ** beta)
+
+        # dry particles
+        r_d_t = (r_md_microns/(alpha * alpha_factor)) ** (1.0/beta)
+
+        return r_d_t
+
+
+
+    # duplicate the range of radii to multiple rows, one for each RH - shape(time, rbin).
+    # Remember: the number in each diameter bin might change, but the bin diameters themselves will not.
+    #   Therefore this approach works for constant and time varying number distirbutions.
+    r_md_microns_dup = np.tile(r_microns, (len(met['time']), 1))
+
+    # Set up array for aerosol
+    r_d =  np.empty(len(met['time']))
+    r_d[:] = np.nan
+
+    phi = np.empty(len(met['time']))
+    phi[:] = np.nan
+
+    # limits for what approach to use, depending on the RH
+    # from the CLASSIC guidence, follows Fitzgerald (1975)
+    if aer_i == '(NH4)2SO4':
+        rh_cap = 0.995 # calculate r_md specifically for the upper limit (considered max rh)
+        rh_del = 0.81 # calculate r_md specifically for the upper limit (start of empirical formula)
+                     # CLASSIC does linear interpolation bettween rh_del and rh_eff.
+        rh_eff = 0.3 # efflorescence (below is dry)
+        alpha_factor = 1.0 # a coefficient for alpha, which is specific for different aerosol types
+    elif aer_i == 'NH4NO3':
+        rh_cap = 0.995
+        rh_del = 0.61
+        rh_eff = 0.3
+        alpha_factor = 1.06
+
+    elif aer_i == 'NaCl':
+        rh_cap = 0.995
+        rh_del = 0.75
+        rh_eff = 0.42
+        alpha_factor = 1.35
+
+    # --------------------------------------------
+    # Calculate r_md for the species, given RH
+    # -----------------------------------------------
+
+    # empirical relationships fitted for radius in micrometers, not meters (according to CLASSIC guidance).
+
+    # --- delequescence - rh cap (defined as 0.995. Above this empirical relationship breaks down) --- #
+
+    # Currently just calculates it for all, then gets overwritten lower down, depending on their RH (e.g. below eff)
+    # ToDo use the rh_bet_del_cap to only calc for those within the del - cap range.
+
+    # # between deliquescence and rh_cap (set at 0.995 for all)
+    # bool = np.logical_and(WXT['RH_frac'] >= rh_del, WXT['RH_frac'] <= rh_cap)
+    # rh_bet_del_cap = np.where(bool == True)[0]
+
+    beta = np.exp((0.00077 * met['RH_frac'])/(1.009 - met['RH_frac']))
+    rh_lt_97 = met['RH_frac'] < 0.97
+    phi[rh_lt_97] = 1.058
+    phi[~rh_lt_97] = 1.058 - ((0.0155 * (met['RH_frac'][~rh_lt_97] - 0.97))
+                              /(1.02 - (met['RH_frac'][~rh_lt_97] ** 1.4)))
+    alpha = 1.2 * np.exp((0.066 * met['RH_frac'])/ (phi - met['RH_frac']))
+
+    # duplicate values across to all radii bins to help r_md = .. calculation: alpha_dup.shape = (time, rbin)
+    alpha_dup = np.tile(alpha, (len(r_microns), 1)).transpose()
+    beta_dup = np.tile(beta, (len(r_microns), 1)).transpose()
+
+
+    # original -> r_md = alpha_factor * alpha_dup * (r_d_microns_dup ** beta_dup)
+    r_d = (r_md_microns_dup/(alpha_dup * alpha_factor)) ** (1.0/beta_dup)
+
+    # --- above rh_cap ------#
+
+    # set all r_md(RH>99.5%) to r_md(RH=99.5%) to prevent growth rates inconsistent with impirical equation.
+    # replace all r_md values above 0.995 with 0.995
+    rh_gt_cap = met['RH_frac'] > rh_cap
+    r_d[rh_gt_cap, :] = calc_r_d_t(r_microns, rh_cap, alpha_factor)
+
+    # --- 0 to efflorescence --- #
+
+    # below efflorescence point (0.3 for sulhate, r_md = r_d)
+    rh_lt_eff = met['RH_frac'] <= rh_eff
+    r_d[rh_lt_eff, :] = r_microns
+
+    # ------ efflorescence to deliquescence ----------#
+
+    # calculate r_d for the deliquescence rh - used in linear interpolation
+    r_d_del = calc_r_d_t(r_microns, rh_del, alpha_factor)
+
+    # all values that need to have some linear interpolation
+    bool = np.logical_and(met['RH_frac'] >= rh_eff, met['RH_frac'] <= rh_del)
+    rh_bet_eff_del = np.where(bool == True)[0]
+
+    # between efflorescence point and deliquescence point, r_md is expected to value linearly between the two
+    low_rh = rh_eff
+    up_rh = rh_del
+    up_r_md = r_microns
+    low_r_d = r_d_del
+
+    diff_rh = up_rh - low_rh
+    diff_r_md = r_microns - r_d_del
+    abs_diff_r_md = abs(diff_r_md)
+
+    # find distance rh is along linear interpolation [fraction] from lower limit
+    # frac = np.empty(len(r_md))
+    # frac[:] = np.nan
+    frac = ((met['RH_frac'][rh_bet_eff_del] - low_rh) / diff_rh)
+
+    # duplicate abs_diff_r_md by the number of instances needing to be interpolated - helps the calculation below
+    #   of r_md = ...low + (frac * abs diff)
+    abs_diff_r_md_dup = np.tile(abs_diff_r_md, (len(rh_bet_eff_del), 1))
+    frac_dup = np.tile(frac, (len(r_microns), 1)).transpose()
+
+    # calculate interpolated values for r_md
+    r_d[rh_bet_eff_del, :] = low_r_d + (frac_dup * abs_diff_r_md_dup)
+
+    return r_d
+
+
 
 # Optical properties
 
@@ -1322,8 +1594,8 @@ def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md
 
     return optics
 
-def main():
-
+# def main():
+if __name__ == '__main__':
 
     # Read in the mass data for 2016
     # Read in RH data for 2016
@@ -1366,7 +1638,7 @@ def main():
     # number of samples to use in geisinger sampling
     n_samples = 4.0
 
-    # wavelength to aim for
+    # wavelength to aim for (in a list! e.g. [905e-06])
     ceil_lambda = [0.905e-06]
     # ceil_lambda = [0.532e-06]
     ceil_lambda_str_nm = str(ceil_lambda[0] * 1.0e09) + 'nm'
@@ -1380,7 +1652,8 @@ def main():
 
     # save dir
     if Geisinger_subsample_flag == 1:
-        savesubdir = savesub + '/geisingersample_2xdN_for_2lowestAPSbins/'
+        # savesubdir = savesub + '/geisingersample_2xdN_for_2lowestAPSbins/'
+        savesubdir = savesub + '/geisingersample/'
     else:
         savesubdir = savesub
 
@@ -1617,6 +1890,7 @@ def main():
         pm10_moles,   pm10_mass_kg_kg = calculate_moles_masses(pm10_mass, met, aer_particles, inc_soot=soot_flag)
 
         # calculate N_weights for each species so the weights can be applied afterwards
+        #
         #N_weight_pm2p5 = N_weights_from_pm_mass(aer_particles, pm2p5_mass_kg_kg, aer_density, met, rn_pmlt2p5_m)
         #N_weight_pm10m2p5 = N_weights_from_pm_mass(aer_particles, pm10m2p5_mass_kg_kg, aer_density, met, rn_2p5_10_m)
         N_weight_pm10 = N_weights_from_pm_mass(aer_particles, pm10_mass_kg_kg, aer_density, met, rn_pm10_m)
@@ -1641,51 +1915,72 @@ def main():
     # Swelling / drying particles
     # ==============================================================================
 
+    # extract particle radii from each instrument, as some need swelling, others drying
+    # microns
+    r_md_smps_microns = r_microns[dN['smps_geisinger_idx']] # originally wet from measurements
+    r_d_grimm_microns = r_microns[dN['grimm_geisinger_idx']] # originally dry from measurements
+
+    # meters
+    r_md_smps_m = r_m[dN['smps_geisinger_idx']] # originally wet from measurements
+    r_d_grimm_m = r_m[dN['grimm_geisinger_idx']] # originally dry from measurements
+
+    # duplicate 1D arrays so they can be appended onto varying radii from dry SMPS and wet GRIMM data
+    r_md_smps_microns_dup = np.tile(r_md_smps_microns, (len(met['time']), 1))
+    r_md_smps_m_dup = np.tile(r_md_smps_m, (len(met['time']), 1))
+
+    r_d_grimm_microns_dup = np.tile(r_d_grimm_microns, (len(met['time']), 1))
+    r_d_grimm_m_dup = np.tile(r_d_grimm_m, (len(met['time']), 1))
+
     # ---------------------------------------------------------
-    # Swell the smps particles (r_md,aer_i) [microns]
-
-    # ToDo - use smps_idx and grimm_idx in the dN variable to swell and dry the right particles
-
-    # set up dictionary
-    r_md = {}
+    # Swell the particle radii bins
+    # r_md [microns]
+    # r_md_m [meters]
 
 
-    # calculate the swollen particle size for these three aerosol types
-    # Follows CLASSIC guidence, based off of Fitzgerald (1975)
-    # guidance requires radii units to be microns
-    for aer_i in ['(NH4)2SO4', 'NH4NO3', 'NaCl']:
-        r_md[aer_i] = calc_r_md_species(r_d_microns, met, aer_i)
-
-    # set r_md for black carbon as r_d, assuming black carbon is completely hydrophobic
-    # create a r_d_microns_dry_dup (rbins copied for each time, t) to help with calculations
-    r_md['CBLK'] = np.tile(r_d_microns, (len(met['time']), 1))
-
-    # make r_md['CBLK'] nan for all sizes, for times t, if mass data is not present for time t
-    # doesn't matter which mass is used, as all mass data have been corrected for if nans were present in other datasets
-    r_md['CBLK'][np.isnan(pm10_mass['CBLK']), :] = np.nan
-
-    # calculate r_md for organic carbon using the MO empirically fitted g(RH) curves
-    r_md['CORG'] = np.empty((len(met['time']), len(r_d_microns)))
-    r_md['CORG'][:] = np.nan
-    for t, time_t in enumerate(met['time']):
-
-        _, idx, _ = eu.nearest(gf_ffoc['RH_frac'], met['RH_frac'][t])
-        r_md['CORG'][t, :] = r_d_microns * gf_ffoc['GF'][idx]
-
-    # convert r_md units from microns to meters
-    r_md_m = {}
-    for aer_i in aer_particles:
-        r_md_m[aer_i] = r_md[aer_i] * 1e-06
-
+    # all particles are swollen
+    # r_md_all, r_md_all_m = calc_r_md_all(r_microns, met, pm10_mass, gf_ffoc)
+    r_md_grimm_microns, r_md_grimm_m = calc_r_md_all(r_microns, met, pm10_mass, gf_ffoc)
 
     # -----------------------------------------------------------
 
     # Dry particles
+    r_d_smps_microns, r_d_smps_m = calc_r_d_all(r_md_smps_microns, met, pm10_mass, gf_ffoc)
 
-    # dry amm nit. sulph and salt
-    # keep BC the same
-    # dry CORG using the GFs
 
+
+    # combine the dried SMPS to the constant GRIMM data together, then the constant wet SMPS to the wet GRIMM data.
+    #   dry SMPS and wet GRIMM radii will vary by species, but the original wet SMPS and dry GRIMM wont as they are
+    #   the original bins.
+    #   Hence for example: r_d_microns[aer_i] = np.append(r_d_smps_microns[aer_i], r_d_grimm_microns)!
+    r_d_microns = {}
+    r_d_m = {}
+    r_md_microns = {}
+    r_md_m = {}
+
+    for aer_i in aer_particles:
+        r_d_microns[aer_i] = np.hstack((r_d_smps_microns[aer_i], r_d_grimm_microns_dup))
+        r_d_m[aer_i] = np.hstack((r_d_smps_m[aer_i], r_d_grimm_m_dup))
+
+        r_md_microns[aer_i] = np.hstack((r_md_smps_microns_dup, r_md_grimm_microns[aer_i]))
+        r_md_m[aer_i] = np.hstack((r_md_smps_m_dup, r_md_grimm_m[aer_i]))
+
+
+
+    # -----------------------------------------------------------
+
+    # Calculate the number concentration now that we know the dry radii
+        # find relative N from N(mass, r_md)
+    num_conc = {}
+    for aer_i in aer_particles:
+
+
+        # Estimated number for the species, from the main distribution data, using the weighting,
+        #    for each time step.
+        # num_conc[aer_i].shape = (time, number of ORIGINAL bins) -
+        #    not then number of bins from geisinger interpolation
+
+        # multiply a 2D array (dN) by a 1D array N_weight_pm10[aer_i]
+        num_conc[aer_i] = dN['dN'] * N_weight_pm10[aer_i][:, None]
 
 
     # -----------------------------------------------------------
@@ -1695,7 +1990,7 @@ def main():
     for aer_i in aer_particles: # aer_particles:
 
         # physical growth factor
-        GF[aer_i] = r_md[aer_i] / r_d_microns_dup
+        GF[aer_i] = r_md_microns[aer_i] / r_d_microns[aer_i]
 
 
     # --------------------------------------------------------------
@@ -1824,9 +2119,5 @@ def main():
 
     # ------------------------------------------------
 
-    return
 
-if __name__ == '__main__':
-    main()
-
-print 'END PROGRAM'
+    print 'END PROGRAM'
