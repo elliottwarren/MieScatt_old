@@ -1150,7 +1150,7 @@ def main():
         savesubdir = savesub
 
 
-    savedir = maindir + 'figures/LidarRatio/' + savesubdir +'/'
+    savedir = maindir + 'figures/LidarRatio/' + savesubdir
 
     # data
     wxtdatadir = datadir
@@ -1165,6 +1165,11 @@ def main():
 
     # data year
     year = '2016'
+
+    # site information
+    site_ins = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine',
+            'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
+
 
     # aerosol particles to calculate (OC = Organic carbon, CBLK = black carbon, both already measured)
     # match dictionary keys further down
@@ -1193,26 +1198,42 @@ def main():
     # pure water density
     water_density = 1000.0 # kg m-3
 
+    # radii used for each aerosol species in calculating the number weights
 
-    # CLASSIC dry radii [microns]
-    r_d_classic_microns = {'(NH4)2SO4': 9.5e-02, # accumulation mode
+    # 1. D < 1.0 micron
+    # CLASSIC dry radii [microns] - Bellouin et al 2011
+    rn_pmlt1p0_microns = {'(NH4)2SO4': 9.5e-02, # accumulation mode
                   'NH4NO3': 9.5e-02, # accumulation mode
                   'NaCl': 1.0e-01, # generic sea salt (fine mode)
                   'CORG': 1.2e-01, # aged fosil fuel organic carbon
                   'CBLK': 3.0e-02} # soot
 
-    # CLASSIC dry radii [m]
-    r_d_classic_m={}
-    for key, r in r_d_classic_microns.iteritems():
-        r_d_classic_m[key] = r * 1e-06
+    rn_pmlt1p0_m={}
+    for key, r in rn_pmlt1p0_microns.iteritems():
+        rn_pmlt1p0_m[key] = r * 1e-06
 
+    # 2. D < 10 micron
     # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
     pm1t10_rv_microns = 1.9848902137534531 / 2.0
 
     # turn units to meters and place an entry for each aerosol
     pm1t10_rv_m = {}
-    for key in r_d_classic_m.iterkeys():
+    for key in rn_pmlt1p0_m.iterkeys():
         pm1t10_rv_m[key] = pm1t10_rv_microns * 1.0e-6
+
+    # 3. D < 2.5 microns
+    rn_pmlt2p5_microns = 0.06752 / 2.0
+
+    rn_pmlt2p5_m = {}
+    for key in rn_pmlt1p0_m.iterkeys():
+        rn_pmlt2p5_m[key] = rn_pmlt2p5_microns * 1.0e-6
+
+    # 4. 2.5 < D < 10 microns
+    rn_2p5_10_microns = 2.820 / 2.0
+
+    rn_2p5_10_m = {}
+    for key in rn_pmlt1p0_m.iterkeys():
+        rn_2p5_10_m[key] = rn_2p5_10_microns * 1.0e-6
 
     # ==============================================================================
     # Read data
@@ -1238,25 +1259,27 @@ def main():
     # with open(filename, 'rb') as handle:
     #     S_loaded = pickle.load(handle)
 
-    # read in clearflo winter number distribution
-    # created on main PC space with calc_plot_N_r_obs.py
-    # !Note: will not work if pickle was saved using protocol=Highest... (for some unknown reason)
-    filename = datadir + 'dN_dmps_aps_clearfloWinter_lt60_cut.pickle'
-    with open(filename, 'rb') as handle:
-        dN = pickle.load(handle)
+    if site_ins['period'] == 'ClearfLo':
 
-    # increase N in the first 2 bins of APS data as these are small due to the the discrepency between DMPS and APS
-    # measurements, as the first 3 APS bins are usually low and need to be corrected (Beddows et al ., 2010)
-    for b in [520, 560]:
-        dN['binned'][:, dN['D'] == b] *= 2.0
+        # read in clearflo winter number distribution
+        # created on main PC space with calc_plot_N_r_obs.py
+        # !Note: will not work if pickle was saved using protocol=Highest... (for some unknown reason)
+        filename = datadir + 'dN_dmps_aps_clearfloWinter_lt60_cut.pickle'
+        with open(filename, 'rb') as handle:
+            dN = pickle.load(handle)
 
-    # make a median distribution of dN
-    dN['med'] = np.nanmedian(dN['binned'], axis=0)
+        # increase N in the first 2 bins of APS data as these are small due to the the discrepency between DMPS and APS
+        # measurements, as the first 3 APS bins are usually low and need to be corrected (Beddows et al ., 2010)
+        for b in [520, 560]:
+            dN['binned'][:, dN['D'] == b] *= 2.0
 
-    # convert D and dD from nm to microns and meters separately, and keep the variables for clarity further down
-    # these are the original bins from the dN data
-    r_d_orig_bins_microns = dN['D'] * 1e-03 / 2.0
-    r_d_orig_bins_m = dN['D'] * 1e-09 / 2.0
+        # make a median distribution of dN
+        dN['med'] = np.nanmedian(dN['binned'], axis=0)
+
+        # convert D and dD from nm to microns and meters separately, and keep the variables for clarity further down
+        # these are the original bins from the dN data
+        r_d_orig_bins_microns = dN['D'] * 1e-03 / 2.0
+        r_d_orig_bins_m = dN['D'] * 1e-09 / 2.0
 
 
     # interpolated r values to from the Geisinger et al 2017 approach
@@ -1362,19 +1385,19 @@ def main():
 
         # work out Number concentration (relative weight) for each species
         # calculate the number of particles for each species using radius_m and the mass
-        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_15min, r_d_classic_m, dN)
+        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_15min, rn_pmlt1p0_m, dN)
 
     elif process_type == 'PM10':
 
         moles, mass_kg_kg = calculate_moles_masses(PM10_mass, WXT_hourly, aer_particles, inc_soot=soot_flag)
-        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_hourly, r_d_classic_m, dN)
+        N_weight, num_conc = est_num_conc_by_species_for_Ndist(aer_particles, mass_kg_kg, aer_density, WXT_hourly, rn_pmlt1p0_m, dN)
 
     elif process_type == 'PM10-1':
 
 
         # PM1 first
         moles, pm1_mass_kg_kg = calculate_moles_masses(PM1_mass_hourly, WXT_hourly, aer_particles, inc_soot=soot_flag)
-        N_weight_pm1, num_conc_pm1 = est_num_conc_by_species_for_Ndist(aer_particles, pm1_mass_kg_kg, aer_density, WXT_hourly, r_d_classic_m, dN)
+        N_weight_pm1, num_conc_pm1 = est_num_conc_by_species_for_Ndist(aer_particles, pm1_mass_kg_kg, aer_density, WXT_hourly, rn_pmlt1p0_m, dN)
 
 
         # PM10-1 second
@@ -1520,7 +1543,7 @@ def main():
     # plt.ylim([20.0, 60.0])
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_dailybinned_lt60_'+ceil_lambda_str_nm+'.png')
+    plt.savefig(savedir + 'S_'+year+'_'+process_type+'_'+Geisinger_str+'_dailybinned_lt60_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # HISTOGRAM - S
@@ -1534,7 +1557,7 @@ def main():
     plt.suptitle('Lidar Ratio:\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Lidar Ratio')
     plt.ylabel('Frequency')
-    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_histogram_lt60_'+ceil_lambda_str_nm+'.png')
+    plt.savefig(savedir + 'S_'+year+'_'+process_type+'_'+Geisinger_str+'_histogram_lt60_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # TIMESERIES - S - not binned
@@ -1545,7 +1568,7 @@ def main():
     plt.xlabel('Date [dd/mm]')
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio [sr]')
-    plt.savefig(savedir + 'S_'+year+'_'+savesubdir+'_'+process_type+Geisinger_str+'_timeseries_lt60_'+ceil_lambda_str_nm+'.png')
+    plt.savefig(savedir + 'S_'+year+'_'+process_type+'_'+Geisinger_str+'_timeseries_lt60_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # SCATTER - S vs RH (PM1)
@@ -1562,7 +1585,7 @@ def main():
     plt.xlabel(r'$RH \/[\%]$')
     plt.ylabel(r'$Lidar Ratio \/[sr]$')
     plt.tight_layout()
-    plt.savefig(savedir +'/S_vs_RH_'+year+'_'+process_type+Geisinger_str+'_scatter_lt60_'+ceil_lambda_str_nm+'.png')
+    plt.savefig(savedir + 'S_vs_RH_'+year+'_'+process_type+'_'+Geisinger_str+'_scatter_lt60_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # ------------------------------------------------
