@@ -1,8 +1,12 @@
 """
-Read in mass and number distribution data from Chilbolton to calculate the Lidar ratio.
+Read in mass, number distribution and RH data from Chilbolton to calculate the Lidar Ratio (S) [sr]. Uses the interpolation
+method from Geisinger et al., 2018 to increase the number of diameter bins and reduce the issue of high sensitivity of S to
+diameter (the discussion version of Geisinger et al., 2018 is clearer and more elaborate than the final
+published version!). Can swell and dry particles from the number distribution (follows the CLASSIC aerosol scheme)!
+
 
 Created by Elliott Tues 23 Jan
-Taken from calc_lidar_ratio_numdist.py
+Taken from calc_lidar_ratio_numdist.py (designed for a constant number dist, from clearFlo, for NK
 
 Variables and their units are paird together in comments with the units in square brackets i.e.
 variable [units]
@@ -22,6 +26,74 @@ import ellUtils as eu
 from mie_sens_mult_aerosol import linear_interpolate_n
 from pymiecoated import Mie
 
+
+# Set up
+
+def fixed_radii_for_Nweights():
+
+    """
+    Fixed radii used for each aerosol species in calculating the number weights (Nweights).
+
+    :return: rn_pmlt1p0_microns, rn_pmlt1p0_m, \
+        rn_pm10_microns, rn_pm10_m, \
+        rn_pmlt2p5_microns, rn_pmlt2p5_m, \
+        rn_2p5_10_microns, rn_2p5_10_m
+
+    Aerosol are those in aer_particles and include: '(NH4)2SO4', 'NH4NO3', 'NaCl', 'CORG', 'CBLK'
+    """
+
+    # 1. D < 1.0 micron
+    # CLASSIC dry radii [microns] - Bellouin et al 2011
+    rn_pmlt1p0_microns = {'(NH4)2SO4': 9.5e-02, # accumulation mode
+                  'NH4NO3': 9.5e-02, # accumulation mode
+                  'NaCl': 1.0e-01, # generic sea salt (fine mode)
+                  'CORG': 1.2e-01, # aged fosil fuel organic carbon
+                  'CBLK': 3.0e-02} # soot
+
+    rn_pmlt1p0_m={}
+    for key, r in rn_pmlt1p0_microns.iteritems():
+        rn_pmlt1p0_m[key] = r * 1e-06
+
+    # 2. D < 10 micron
+
+    # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
+    rn_pm10_microns = 0.07478 / 2.0
+    # turn units to meters and place an entry for each aerosol
+    rn_pm10_m = {}
+    for key in rn_pmlt1p0_m.iterkeys():
+        rn_pm10_m[key] = rn_pm10_microns * 1.0e-6
+
+    # # old 2. D < 10 micron
+    # # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
+    # pm1t10_rv_microns = 1.9848902137534531 / 2.0
+    # # turn units to meters and place an entry for each aerosol
+    # pm1t10_rv_m = {}
+    # for key in rn_pmlt1p0_m.iterkeys():
+    #     pm1t10_rv_m[key] = pm1t10_rv_microns * 1.0e-6
+
+
+    # 3. D < 2.5 microns
+    # calculated from Chilbolton data (SMPS + GRIMM 2016)
+    rn_pmlt2p5_microns = 0.06752 / 2.0
+
+    rn_pmlt2p5_m = {}
+    for key in rn_pmlt1p0_m.iterkeys():
+        rn_pmlt2p5_m[key] = rn_pmlt2p5_microns * 1.0e-6
+
+    # 4. 2.5 < D < 10 microns
+    # calculated from Chilbolton data (SMPS + GRIMM 2016)
+    rn_2p5_10_microns = 2.820 / 2.0
+
+    rn_2p5_10_m = {}
+    for key in rn_pmlt1p0_m.iterkeys():
+        rn_2p5_10_m[key] = rn_2p5_10_microns * 1.0e-6
+
+
+    return \
+        rn_pmlt1p0_microns, rn_pmlt1p0_m, \
+        rn_pm10_microns, rn_pm10_m, \
+        rn_pmlt2p5_microns, rn_pmlt2p5_m, \
+        rn_2p5_10_microns, rn_2p5_10_m
 
 # Read
 
@@ -525,14 +597,15 @@ def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
 
     """
     time match all the main data dictionaries together (pm, RH and dN data), according to the time resolution given
-    (timeRes).
+    (timeRes). Makes all values nan for a time, t, if any one of the variables has missing data (very conservative
+    appoach).
 
     :param pm2p5_mass_in:
     :param pm10_mass_in:
     :param met_in: contains RH, Tair, air pressure
     :param dN_in:
     :param timeRes:
-    :return:
+    :return: pm2p5_mass, pm10_mass, met, dN
     """
 
     ## 1. set up dictionaries with times
@@ -551,7 +624,9 @@ def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
     # set up dictionaries (just with time and any non-time related values at the moment)
     pm2p5_mass = {'time': time_range}
     pm10_mass = {'time': time_range}
-    dN = {'time': time_range, 'D': dN_in['D'], 'dD': dN_in['dD'], 'grimm_idx': dN_in['grimm_idx'], 'smps_idx': dN_in['smps_idx']}
+    dN = {'time': time_range, 'D': dN_in['D'], 'dD': dN_in['dD'],
+          'grimm_idx': dN_in['grimm_idx'], 'smps_idx': dN_in['smps_idx'],
+          'grimm_geisinger_idx': dN_in['grimm_geisinger_idx'], 'smps_geisinger_idx': dN_in['smps_geisinger_idx']}
     met = {'time': time_range}
 
     ## 2. set up empty arrays within dictionaries
@@ -560,7 +635,7 @@ def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
 
         for key in var_in.iterkeys():
             # only fill up the variables
-            if key not in ['time', 'D', 'dD', 'grimm_idx', 'smps_idx']:
+            if key not in ['time', 'D', 'dD', 'grimm_idx', 'smps_idx', 'grimm_geisinger_idx', 'smps_geisinger_idx']:
 
                 # make sure the dimensions of the arrays are ok. Will either be 1D (e.g RH) or 2D (e.g. dN)
                 dims = var_in[key].ndim
@@ -603,6 +678,51 @@ def time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes):
             # change the skip_idx for the next loop to start just after where last idx finished
             if skip_idx_set_i.size != 0:
                 skip_idx = skip_idx_set_i[-1] + 1
+
+
+    ## 4. nan across variables for missing data
+    # make data for any instance of time, t, to be nan if any data is missing from dN, met or pm mass data
+
+    ## 4.1 find bad items
+    # make and append to a list, rows where bad data is present, across all the variables
+    bad = []
+
+    for var in [pm2p5_mass, pm10_mass, met, dN]:
+
+        for key, data in var.iteritems():
+
+            if key not in ['time', 'D', 'dD', 'grimm_idx', 'grimm_geisinger_idx', 'smps_idx', 'smps_geisinger_idx']:
+
+                # number of dimensions for data
+                dims = data.ndim
+                if dims == 1:
+                    for t in range(len(time_range)):
+                        if np.isnan(data[t]):
+                            bad += [t]
+
+                else:
+                    for t in range(len(time_range)):
+                        if any(np.isnan(data[t, :]) == True): # any nans in the row
+                            bad += [t] # store the time idx as being bad
+
+    ## 4.2 find unique bad idxs and make all values at that time nan, across all the variables
+    bad_uni = np.unique(np.array(bad))
+
+    for var in [pm2p5_mass, pm10_mass, met, dN]:
+
+        for key, data in var.iteritems():
+
+            if key not in ['time', 'D', 'dD', 'grimm_idx', 'grimm_geisinger_idx', 'smps_idx', 'smps_geisinger_idx']:
+
+                # number of dimensions for data
+                dims = data.ndim
+                if dims == 1:
+                    var[key][bad_uni] = np.nan
+
+                else:
+                    var[key][bad_uni, :] = np.nan
+
+
 
     return pm2p5_mass, pm10_mass, met, dN
 
@@ -1445,7 +1565,7 @@ def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet
     return optics
 
 def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet, num_conc,
-                                    n_samples, r_d_orig_bins_m):
+                                    n_samples, r_orig_bins_m):
 
     """
     Calculate the lidar ratio and store all optic calculations in a single dictionary for export and pickle saving
@@ -1493,16 +1613,16 @@ def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md
             # status tracking
             print '  ' + aer_i
 
-            Q_ext[aer_i] = np.empty((len(date_range), len(r_d_orig_bins_m)))
+            Q_ext[aer_i] = np.empty((len(date_range), len(r_orig_bins_m)))
             Q_ext[aer_i][:] = np.nan
 
-            Q_back[aer_i] = np.empty((len(date_range), len(r_d_orig_bins_m)))
+            Q_back[aer_i] = np.empty((len(date_range), len(r_orig_bins_m)))
             Q_back[aer_i][:] = np.nan
 
-            C_ext[aer_i] = np.empty((len(date_range), len(r_d_orig_bins_m)))
+            C_ext[aer_i] = np.empty((len(date_range), len(r_orig_bins_m)))
             C_ext[aer_i][:] = np.nan
 
-            C_back[aer_i] = np.empty((len(date_range), len(r_d_orig_bins_m)))
+            C_back[aer_i] = np.empty((len(date_range), len(r_orig_bins_m)))
             C_back[aer_i][:] = np.nan
 
             sigma_ext[aer_i] = np.empty(len(date_range))
@@ -1520,7 +1640,7 @@ def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md
                     print '     ' + str(t)
 
                 # for each r bin
-                for r_bin_idx, r_i in enumerate(r_d_orig_bins_m):
+                for r_bin_idx, r_i in enumerate(r_orig_bins_m):
 
                     # set up the extinction and backscatter efficiencies for this bin range
                     Q_ext_sample = np.empty(int(n_samples))
@@ -1653,12 +1773,12 @@ if __name__ == '__main__':
     # save dir
     if Geisinger_subsample_flag == 1:
         # savesubdir = savesub + '/geisingersample_2xdN_for_2lowestAPSbins/'
-        savesubdir = savesub + '/geisingersample/'
+        savesubdir = savesub
     else:
         savesubdir = savesub
 
 
-    savedir = maindir + 'figures/LidarRatio/' + savesubdir
+    savedir = maindir + 'figures/LidarRatio/' + savesubdir + '/'
 
     # data
     #wxtdatadir = datadir
@@ -1701,59 +1821,14 @@ if __name__ == '__main__':
                    'CORG': 1100.0,
                    'CBLK': 1200.0}
 
-
     # pure water density
     water_density = 1000.0 # kg m-3
 
-    # radii used for each aerosol species in calculating the number weights
-
-    # 1. D < 1.0 micron
-    # CLASSIC dry radii [microns] - Bellouin et al 2011
-    rn_pmlt1p0_microns = {'(NH4)2SO4': 9.5e-02, # accumulation mode
-                  'NH4NO3': 9.5e-02, # accumulation mode
-                  'NaCl': 1.0e-01, # generic sea salt (fine mode)
-                  'CORG': 1.2e-01, # aged fosil fuel organic carbon
-                  'CBLK': 3.0e-02} # soot
-
-    rn_pmlt1p0_m={}
-    for key, r in rn_pmlt1p0_microns.iteritems():
-        rn_pmlt1p0_m[key] = r * 1e-06
-
-    # 2. D < 10 micron
-
-    # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
-    rn_pm10_microns = 0.07478 / 2.0
-    # turn units to meters and place an entry for each aerosol
-    rn_pm10_m = {}
-    for key in rn_pmlt1p0_m.iterkeys():
-        rn_pm10_m[key] = rn_pm10_microns * 1.0e-6
-
-    # # old 2. D < 10 micron
-    # # pm1 to pm10 median volume mean radius calculated from clearflo winter data (calculated volume mean diameter / 2.0)
-    # pm1t10_rv_microns = 1.9848902137534531 / 2.0
-    # # turn units to meters and place an entry for each aerosol
-    # pm1t10_rv_m = {}
-    # for key in rn_pmlt1p0_m.iterkeys():
-    #     pm1t10_rv_m[key] = pm1t10_rv_microns * 1.0e-6
-
-
-
-
-    # 3. D < 2.5 microns
-    # calculated from Chilbolton data (SMPS + GRIMM 2016)
-    rn_pmlt2p5_microns = 0.06752 / 2.0
-
-    rn_pmlt2p5_m = {}
-    for key in rn_pmlt1p0_m.iterkeys():
-        rn_pmlt2p5_m[key] = rn_pmlt2p5_microns * 1.0e-6
-
-    # 4. 2.5 < D < 10 microns
-    # calculated from Chilbolton data (SMPS + GRIMM 2016)
-    rn_2p5_10_microns = 2.820 / 2.0
-
-    rn_2p5_10_m = {}
-    for key in rn_pmlt1p0_m.iterkeys():
-        rn_2p5_10_m[key] = rn_2p5_10_microns * 1.0e-6
+    # # radii used for each aerosol species in calculating the number weights
+    rn_pmlt1p0_microns, rn_pmlt1p0_m, \
+    rn_pm10_microns, rn_pm10_m, \
+    rn_pmlt2p5_microns, rn_pmlt2p5_m, \
+    rn_2p5_10_microns, rn_2p5_10_m = fixed_radii_for_Nweights()
 
     # ==============================================================================
     # Read data
@@ -1765,7 +1840,7 @@ if __name__ == '__main__':
     # Read in physical growth factors (GF) for organic carbon (assumed to be the same as aged fossil fuel OC)
     gf_ffoc_raw = eu.csv_read(ffoc_gfdir + 'GF_fossilFuelOC_calcS.csv')
     gf_ffoc_raw = np.array(gf_ffoc_raw)[1:, :] # skip header
-    gf_ffoc = {'RH_frac': np.array(gf_ffoc_raw[:,0], dtype=float),
+    gf_ffoc = {'RH_frac': np.array(gf_ffoc_raw[:, 0], dtype=float),
                 'GF': np.array(gf_ffoc_raw[:, 1], dtype=float)}
 
     # # Read WXT data
@@ -1786,10 +1861,11 @@ if __name__ == '__main__':
         with open(filename, 'rb') as handle:
             dN_in = pickle.load(handle)
 
-        # increase N in the first 2 bins of APS data as these are small due to the the discrepency between DMPS and APS
-        # measurements, as the first 3 APS bins are usually low and need to be corrected (Beddows et al ., 2010)
-        for b in [520, 560]:
-            dN_in['binned'][:, dN_in['D'] == b] *= 2.0
+        # Test with the DMPS and APS data: effect in the end was very small.
+        # # increase N in the first 2 bins of APS data as these are small due to the the discrepency between DMPS and APS
+        # # measurements, as the first 3 APS bins are usually low and need to be corrected (Beddows et al ., 2010)
+        # for b in [520, 560]:
+        #     dN_in['binned'][:, dN_in['D'] == b] *= 2.0
 
         # make a median distribution of dN
         dN_in['med'] = np.nanmedian(dN_in['binned'], axis=0)
@@ -1860,6 +1936,8 @@ if __name__ == '__main__':
         # RH, Tair and pressure data was bundled with the dN data, so extract out here to make it clearly separate.
         met_in = {'time': dN_in['time'], 'RH': dN_in['RH'], 'Tair': dN_in['Tair'], 'pressure': dN_in['pressure']}
 
+        if 'RH_frac' not in met_in:
+            met_in['RH_frac'] = met_in['RH']/100.0
 
 
     # ==============================================================================
@@ -1867,11 +1945,12 @@ if __name__ == '__main__':
     # ==============================================================================
 
 
-    # time match and allign pm2.5, pm10, RH and dN data
-    #   average up data to the same time resolution, according to timeRes
+    # Time match and allign pm2.5, pm10, RH and dN data
+    # Average up data to the same time resolution, according to timeRes
+    # All values of an instance are set to nan if there is ANY missing data (e.g. if just the GRIMM was missing
+    #   the PM, dN, and RH data for that time will be set to nan) -> avoid unrealistic weighting
     pm2p5_mass, pm10_mass, met, dN = time_match_pm_RH_dN(pm2p5_mass_in, pm10_mass_in, met_in, dN_in, timeRes)
 
-    # ToDo - Need to set nan any instances in time where any of the data is missing e.g. is SMPS is missing
 
     # ==============================================================================
     # Main processing and calculations
@@ -1907,7 +1986,6 @@ if __name__ == '__main__':
 
 
 
-
     # calculate dry volume from the mass of each species
     # V_dry_from_mass = calc_dry_volume_from_mass(aer_particles, mass_kg_kg, aer_density)
 
@@ -1936,17 +2014,14 @@ if __name__ == '__main__':
     # r_md [microns]
     # r_md_m [meters]
 
-
-    # all particles are swollen
-    # r_md_all, r_md_all_m = calc_r_md_all(r_microns, met, pm10_mass, gf_ffoc)
-    r_md_grimm_microns, r_md_grimm_m = calc_r_md_all(r_microns, met, pm10_mass, gf_ffoc)
+    r_md_grimm_microns, r_md_grimm_m = calc_r_md_all(r_d_grimm_microns, met, pm10_mass, gf_ffoc)
 
     # -----------------------------------------------------------
 
     # Dry particles
     r_d_smps_microns, r_d_smps_m = calc_r_d_all(r_md_smps_microns, met, pm10_mass, gf_ffoc)
 
-
+    # -----------------------------------------------------------
 
     # combine the dried SMPS to the constant GRIMM data together, then the constant wet SMPS to the wet GRIMM data.
     #   dry SMPS and wet GRIMM radii will vary by species, but the original wet SMPS and dry GRIMM wont as they are
@@ -1964,6 +2039,17 @@ if __name__ == '__main__':
         r_md_microns[aer_i] = np.hstack((r_md_smps_microns_dup, r_md_grimm_microns[aer_i]))
         r_md_m[aer_i] = np.hstack((r_md_smps_m_dup, r_md_grimm_m[aer_i]))
 
+    # the swelling/drying wont work when RH was nan
+    #   therefore make all bins nan when RH was nan.
+    nan_idx = np.isnan(dN['RH_frac'])
+
+    for aer_i in aer_particles:
+
+        r_d_microns[aer_i][nan_idx] = np.nan
+        r_d_m[aer_i][nan_idx] = np.nan
+
+        r_md_microns[aer_i][nan_idx] = np.nan
+        r_md_m[aer_i][nan_idx] = np.nan
 
 
     # -----------------------------------------------------------
@@ -2011,7 +2097,7 @@ if __name__ == '__main__':
         optics = calculate_lidar_ratio(aer_particles, met['time'], ceil_lambda, r_md_m,  n_wet, num_conc)
     else:
         optics = calculate_lidar_ratio_geisinger(aer_particles, met['time'], ceil_lambda, r_md_m,  n_wet, num_conc,
-                                    n_samples, r_d_orig_bins_m)
+                                    n_samples, r_orig_bins_m)
 
     # extract out the lidar ratio
     S = optics['S']
@@ -2072,12 +2158,13 @@ if __name__ == '__main__':
     # plt.ylim([20.0, 60.0])
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio')
-    plt.savefig(savedir + 'S_'+year+'_'+process_type+'_'+Geisinger_str+'_dailybinned_lt60_'+ceil_lambda_str_nm+'.png')
+    plt.savefig(savedir + 'S_'+year+'_'+site_ins['site_short']+'_'+process_type+'_'+Geisinger_str+'_dailybinned_'+ceil_lambda_str_nm+'.png')
+    # plt.savefig(savedir + 'S_'+year+'_'+process_type+'_'+Geisinger_str+'_dailybinned_lt60_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # HISTOGRAM - S
 
-    idx = np.logical_or(np.isnan(S), np.isnan(WXT_hourly['RH']))
+    idx = np.logical_or(np.isnan(S), np.isnan(met['RH']))
 
     # plot all the S in raw form (hist)
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
@@ -2086,7 +2173,7 @@ if __name__ == '__main__':
     plt.suptitle('Lidar Ratio:\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel('Lidar Ratio')
     plt.ylabel('Frequency')
-    plt.savefig(savedir + 'S_'+year+'_'+process_type+'_'+Geisinger_str+'_histogram_lt60_'+ceil_lambda_str_nm+'.png')
+    plt.savefig(savedir + 'S_'+year+'_'+site_ins['site_short']+'_'+process_type+'_'+Geisinger_str+'_histogram_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # TIMESERIES - S - not binned
@@ -2097,27 +2184,38 @@ if __name__ == '__main__':
     plt.xlabel('Date [dd/mm]')
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio [sr]')
-    plt.savefig(savedir + 'S_'+year+'_'+process_type+'_'+Geisinger_str+'_timeseries_lt60_'+ceil_lambda_str_nm+'.png')
+    plt.savefig(savedir + 'S_'+year+'_'+site_ins['site_short']+'_'+process_type+'_'+Geisinger_str+'_timeseries_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # SCATTER - S vs RH (PM1)
     # quick plot 15 min S and RH for 2016.
-    corr = spearmanr(WXT['RH'], S)
+    corr = spearmanr(met['RH'], S)
     r_str = '%.2f' % corr[0]
     fig, ax = plt.subplots(1,1,figsize=(8, 4))
-    scat = ax.scatter(WXT['RH'], S)
-    scat = ax.scatter(WXT['RH'], S, c=N_weight_pm10m1['CBLK']*100.0, vmin= 0.0, vmax = 30.0)
+    scat = ax.scatter(met['RH'], S)
+    scat = ax.scatter(met['RH'], S, c=N_weight_pm10['CBLK']*100.0, vmin= 0.0, vmax = 15.0)
     cbar = plt.colorbar(scat, ax=ax)
     cbar.set_label('Soot [%]', labelpad=-20, y=1.1, rotation=0)
     #   cbar.set_label('Soot [%]', labelpad=-20, y=1.075, rotation=0)
     # plt.suptitle('Lidar Ratio with soot fraction - r='+r_str+':\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
     plt.xlabel(r'$RH \/[\%]$')
     plt.ylabel(r'$Lidar Ratio \/[sr]$')
+    plt.ylim([10.0, 80.0])
+    plt.xlim([20.0, 110.0])
     plt.tight_layout()
-    plt.savefig(savedir + 'S_vs_RH_'+year+'_'+process_type+'_'+Geisinger_str+'_scatter_lt60_'+ceil_lambda_str_nm+'.png')
+    plt.savefig(savedir + 'S_vs_RH_'+year+'_'+site_ins['site_short']+'_'+process_type+'_'+Geisinger_str+'_scatter_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
     # ------------------------------------------------
+
+    colours = ['red', 'blue', 'green', 'black', 'purple']
+
+    for i, aer_i in enumerate(aer_particles):
+
+        plt.semilogy(np.nanmean(r_d_m[aer_i], axis=0), color=colours[i], linestyle = '-', label=aer_i + ' dry')
+        plt.semilogy(np.nanmean(r_md_m[aer_i], axis=0), color=colours[i], linestyle='--', label=aer_i + ' wet')
+
+    plt.legend(loc='best')
 
 
     print 'END PROGRAM'
