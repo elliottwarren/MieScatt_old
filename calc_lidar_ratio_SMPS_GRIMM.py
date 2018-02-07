@@ -21,6 +21,7 @@ import numpy as np
 import datetime as dt
 from dateutil import tz
 from scipy.stats import spearmanr
+from scipy.stats import pearsonr
 
 import ellUtils as eu
 from mie_sens_mult_aerosol import linear_interpolate_n
@@ -421,6 +422,7 @@ def Geisinger_increase_r_bins(dN, r_d_orig_bins_microns, n_samples=4.0):
 
     return R_dg_microns, dN
 
+### not used now
 def WXT_hourly_average(WXT_in):
 
 
@@ -456,6 +458,7 @@ def WXT_hourly_average(WXT_in):
 
     return WXT_hourly
 
+### not used now
 def internal_time_completion(data, date_range):
 
     """
@@ -525,6 +528,7 @@ def merge_pm_mass(pm_mass_in, pm_oc_bc):
 
     return pm_mass_in
 
+### not used now
 def coarsen_PM1_mass_hourly(WXT_hourly, PM1_mass):
 
     """
@@ -1460,9 +1464,9 @@ def calc_r_d_species(r_microns, met, aer_i):
     return r_d
 
 
-
 # Optical properties
 
+### not used now
 def calculate_lidar_ratio(aer_particles, date_range, ceil_lambda, r_md_m,  n_wet, num_conc):
 
     """
@@ -1714,13 +1718,36 @@ def calculate_lidar_ratio_geisinger(aer_particles, date_range, ceil_lambda, r_md
 
     return optics
 
+# saving
+def pickle_optics_save(site_ins, optics, datadir, savestr, savesub, ceil_lambda_str_nm, **kwargs):
+
+    """
+    Save the calculated optical properties, given that they can easily take 3+ hours to compute
+    :param site_ins:
+    :param optics:
+    :param datadir:
+    :param savestr:
+    :param savesub:
+    :param ceil_lambda_str_nm:
+    :param kwargs:
+    :return:
+    """
+
+    pickle_save = {'site_ins':site_ins, 'optics': optics}
+    if kwargs is not None:
+        pickle_save.update(kwargs)
+    with open(datadir + 'pickle/'+savestr+'_'+savesub+'_'+site_ins['period']+'_'+ceil_lambda_str_nm+'.pickle', 'wb') as handle:
+        pickle.dump(pickle_save, handle)
+
+    return
+
 # def main():
 if __name__ == '__main__':
 
     # Read in the mass data for 2016
     # Read in RH data for 2016
     # convert gases and such into the aerosol particles
-    # swell the particles based on the CLASSIC scheme stuff
+    # swell/dry the particles based on the CLASSIC scheme stuff
     # use Mie code to calculate the backscatter and extinction
     # calculate lidar ratio
     # plot lidar ratio
@@ -1730,8 +1757,9 @@ if __name__ == '__main__':
     # ==============================================================================
 
     # site information
-    site_ins = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': 'routine',
-            'DMPS': False, 'APS': False, 'SMPS': True, 'GRIMM': True}
+    site_ins = {'site_short':'Ch', 'site_long': 'Chilbolton', 'period': '2016',
+            'instruments': ['SMPS', 'GRIMM'], 'ceil_lambda': 0.905e-06}
+
 
     # use PM1 or pm10 data?
     process_type = 'pm10-2p5'
@@ -1759,7 +1787,7 @@ if __name__ == '__main__':
     n_samples = 4.0
 
     # wavelength to aim for (in a list! e.g. [905e-06])
-    ceil_lambda = [0.905e-06]
+    ceil_lambda = [site_ins['ceil_lambda']]
     # ceil_lambda = [0.532e-06]
     ceil_lambda_str_nm = str(ceil_lambda[0] * 1.0e09) + 'nm'
 
@@ -1777,7 +1805,7 @@ if __name__ == '__main__':
     else:
         savesubdir = savesub
 
-
+    # full save directory (including sub directories)
     savedir = maindir + 'figures/LidarRatio/' + savesubdir + '/'
 
     # data
@@ -1788,11 +1816,14 @@ if __name__ == '__main__':
     # save all output data as a pickle?
     picklesave = True
 
+    # site and instruments used to help with file saves
+    savestr = site_ins['site_short'] + '_' + '_'.join(site_ins['instruments'])
+
     # RH data
     #wxt_inst_site = 'WXT_KSSW'
 
     # data year
-    year = '2016'
+    year = site_ins['period']
 
     # resolution to average data to (in minutes! e.g. 60)
     timeRes = 60
@@ -2102,23 +2133,14 @@ if __name__ == '__main__':
     # extract out the lidar ratio
     S = optics['S']
 
-    # pickle save
+
+    # save the output data encase it needs to be used again (pickle!)
+    #   calculating the lidar ratio for 1 year can take 3-6 hours (depending on len(D))
     if picklesave == True:
-
-        if process_type == 'PM1':
-                WXT = WXT_15min
-        elif process_type == 'pm10':
-                WXT = WXT_hourly
-        elif process_type == 'pm10-1':
-                mass_kg_kg = {'PM1': pm10m1_mass_kg_kg, 'pm10-1': pm10m1_mass_kg_kg}
-                WXT = WXT_hourly
-                N_weight = {'PM1': N_weight_pm1,'pm10-1': N_weight_pm10m1}
+        pickle_optics_save(site_ins, optics, datadir, savestr, savesub, ceil_lambda_str_nm, met=met, N_weight=N_weight_pm10, num_conc=num_conc, dN=dN, pm10_mass=pm10_mass,
+                    ceil_lambda=ceil_lambda)
 
 
-        pickle_save = {'optics': optics, 'WXT':WXT, 'N_weight': N_weight,
-                       'num_conc':num_conc, 'mass_kg_kg': mass_kg_kg, 'dN':dN, 'r_md':r_md}
-        with open(datadir + 'pickle/allvars_'+savesub+'_'+year+'_geisingerSample_'+ceil_lambda_str_nm+'.pickle', 'wb') as handle:
-            pickle.dump(pickle_save, handle)
 
     # get mean and nanstd from data
     # set up the date range to fill (e.g. want daily statistics then stats_date_range = daily resolution)
@@ -2126,8 +2148,6 @@ if __name__ == '__main__':
     stats_date_range = np.array(eu.date_range(met['time'][0], met['time'][-1] + dt.timedelta(days=1), 1, 'days'))
 
     stats ={}
-    # S_keep = deepcopy(S)
-    # S[S > 70] = np.nan
 
     for stat_i in ['mean', 'median', 'stdev', '25pct', '75pct']:
         stats[stat_i] = np.empty(len(stats_date_range))
@@ -2180,17 +2200,25 @@ if __name__ == '__main__':
     # plot all the S in raw form (plot_date)
     fig, ax = plt.subplots(1,1,figsize=(8, 5))
     ax.plot_date(met['time'], S, fmt='-')
-    plt.suptitle('Lidar Ratio:\n'+savesub+' masses; equal Number weighting per rbin; ClearfLo winter N(r)')
+    plt.suptitle('Lidar Ratio:'+savesub+'\n masses; equal Number weighting per rbin; '+savestr + ' ' + site_ins['period'])
     plt.xlabel('Date [dd/mm]')
     ax.xaxis.set_major_formatter(DateFormatter('%d/%m'))
     plt.ylabel('Lidar Ratio [sr]')
     plt.savefig(savedir + 'S_'+year+'_'+site_ins['site_short']+'_'+process_type+'_'+Geisinger_str+'_timeseries_'+ceil_lambda_str_nm+'.png')
     plt.close(fig)
 
+    # Pearson and Spearman correlation
+    # WARNING spearman and pearson correlations give erronous values if nan values are present!!!!!
+    idx1 = np.where(~np.isnan(met['RH']))
+    idx2 = np.where(~np.isnan(S))
+    idx = np.unique(np.append(idx1, idx2))
+    corr_pearson = pearsonr(met['RH'][idx], S[idx])
+    corr_spearman = spearmanr(met['RH'][idx], S[idx])
+
     # SCATTER - S vs RH (PM1)
     # quick plot 15 min S and RH for 2016.
-    corr = spearmanr(met['RH'], S)
-    r_str = '%.2f' % corr[0]
+    # corr = spearmanr(met['RH'], S) <- erronous value!!!! (https://github.com/scipy/scipy/issues/6530)
+    # r_str = '%.2f' % corr[0]
     fig, ax = plt.subplots(1,1,figsize=(8, 4))
     scat = ax.scatter(met['RH'], S)
     scat = ax.scatter(met['RH'], S, c=N_weight_pm10['CBLK']*100.0, vmin= 0.0, vmax = 15.0)
@@ -2208,14 +2236,114 @@ if __name__ == '__main__':
 
     # ------------------------------------------------
 
+    # LINE - wet and dry diameters
     colours = ['red', 'blue', 'green', 'black', 'purple']
-
     for i, aer_i in enumerate(aer_particles):
-
         plt.semilogy(np.nanmean(r_d_m[aer_i], axis=0), color=colours[i], linestyle = '-', label=aer_i + ' dry')
         plt.semilogy(np.nanmean(r_md_m[aer_i], axis=0), color=colours[i], linestyle='--', label=aer_i + ' wet')
-
     plt.legend(loc='best')
+
+
+    # ------------------------------------------------
+
+    # BOX PLOT - S binned by RH, then by soot
+
+    # set up bins to divide the data [%]
+    rh_bin_starts = np.array([0.0, 50.0, 60.0, 70.0, 80.0, 90.0])
+    rh_bin_ends = np.append(rh_bin_starts[1:], 100.0)
+
+    # set up limit for soot last bin to be inf [fraction]
+    soot_starts = np.array([0.0, 0.03, 0.09])
+    soot_ends = np.append(soot_starts[1:], np.inf)
+
+
+    # positions for each boxplot (1/6, 3/6, 5/6 into each bin, given 3 soot groups)
+    #   and widths for each boxplot
+    pos = []
+    widths = []
+
+    for i, (rh_s, rh_e) in enumerate(zip(rh_bin_starts, rh_bin_ends)):
+
+        bin_6th = (rh_e-rh_s) * 1.0/6.0 # 1/6th of the current bin width
+        pos += [[rh_s + bin_6th, rh_s +(3*bin_6th), rh_s+(5*bin_6th)]] #1/6, 3/6, 5/6 into each bin for the soot boxplots
+
+        widths += [bin_6th]
+
+
+    # Split the data - keep them in lists to preserve the order when plotting
+    # bin_range_str will match each set of lists in rh_binned
+    rh_split = {'binned': [], 'mean': [], 'n': [], 'bin_range_str': [], 'pos': []}
+
+    for i, (rh_s, rh_e) in enumerate(zip(rh_bin_starts, rh_bin_ends)):
+
+        # bin range
+        rh_split['bin_range_str'] += [str(int(rh_s)) + '-' + str(int(rh_e))]
+
+        # the list of lists for this RH bin (the actual data, the mean and sample number)
+        rh_bin_i = []
+        rh_bin_mean_i = []
+        rh_bin_n_i = []
+
+        # extract out all S values that occured for this RH range and their corresponding CBLK weights
+        rh_bool = np.logical_and(met['RH'] >= rh_s, met['RH'] < rh_e)
+        S_rh_i = S[rh_bool]
+        N_weight_cblk_rh_i = N_weight_pm10['CBLK'][rh_bool]
+
+        # idx of binned data
+        for soot_s, soot_e in zip(soot_starts, soot_ends):
+
+            # booleon for the soot data, for this rh subsample
+            soot_bool = np.logical_and(N_weight_cblk_rh_i >= soot_s, N_weight_cblk_rh_i < soot_e)
+            S_rh_i_soot_j = S_rh_i[soot_bool] # soot subsample from the rh subsample
+
+
+            # store the values for this bin
+            rh_bin_i += [S_rh_i_soot_j] # the of subsample
+            rh_bin_mean_i += [np.mean(S_rh_i_soot_j)] # mean of of subsample
+            rh_bin_n_i += [len(S_rh_i_soot_j)] # number of subsample
+
+        # add each set of rh_bins onto the full set of rh_bins
+        rh_split['binned'] += [rh_bin_i]
+        rh_split['mean'] += [rh_bin_mean_i]
+        rh_split['n'] += [rh_bin_n_i]
+
+
+    # start the boxplots
+    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
+    for j, rh_bin_j, bin_range_str_j in enumerate(zip(rh_split['binned'], rh_split['bin_range_str'])):
+        plt.boxplot(rh_bin_j)
+
+
+
+# for i in rh_binned:
+#      for j in i:
+#          print len(j)
+#      print ''
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     print 'END PROGRAM'
