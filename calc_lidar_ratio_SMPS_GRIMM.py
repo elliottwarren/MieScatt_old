@@ -2261,6 +2261,7 @@ if __name__ == '__main__':
     #   and widths for each boxplot
     pos = []
     widths = []
+    mid = []
 
     for i, (rh_s, rh_e) in enumerate(zip(rh_bin_starts, rh_bin_ends)):
 
@@ -2268,6 +2269,8 @@ if __name__ == '__main__':
         pos += [[rh_s + bin_6th, rh_s +(3*bin_6th), rh_s+(5*bin_6th)]] #1/6, 3/6, 5/6 into each bin for the soot boxplots
 
         widths += [bin_6th]
+
+        mid += [rh_s +(3*bin_6th)]
 
 
     # Split the data - keep them in lists to preserve the order when plotting
@@ -2309,10 +2312,38 @@ if __name__ == '__main__':
 
 
     # start the boxplots
-    fig, ax = plt.subplots(1, 1, figsize=(6, 4))
-    for j, rh_bin_j, bin_range_str_j in enumerate(zip(rh_split['binned'], rh_split['bin_range_str'])):
-        plt.boxplot(rh_bin_j)
+    # whis=[10, 90] wont work if the q1 or q3 extend beyond the whiskers... (the one bin with n=3...)
+    fig, ax = plt.subplots(1, 1, figsize=(8, 4))
+    plt.hold(True)
+    for j, (rh_bin_j, bin_range_str_j) in enumerate(zip(rh_split['binned'], rh_split['bin_range_str'])):
+        bp = plt.boxplot(list(rh_bin_j), widths=widths[j], positions=pos[j], sym='x')
 
+
+        # colour the boxplots
+        for c, colour_c in enumerate(['blue', 'orange', 'red']):
+
+            # some pats of the boxplots are in two parts (e.g. 2 caps for each boxplot) therefore make an x_idx
+            #   for each pair
+            c_pair_idx = range(2*c,(2*c)+2)
+
+            plt.setp(bp['boxes'][c], color=colour_c)
+            plt.setp(bp['caps'][c_pair_idx], color=colour_c)
+            plt.setp(bp['whiskers'][c_pair_idx], color=colour_c)
+            plt.setp(bp['fliers'][c_pair_idx], color=colour_c)
+            plt.setp(bp['medians'][c_pair_idx], color=colour_c)
+
+    # prettify
+    ax.set_xlim([0.0, 100.0])
+    ax.set_xticks(mid)
+    ax.set_xticklabels(rh_split['bin_range_str'])
+    ax.set_ylabel('S')
+    ax.set_xlabel('RH [%]')
+
+
+    # add vertical dashed lines to split the groups up
+    (y_min, y_max) = ax.get_ylim()
+    for rh_e in rh_bin_ends:
+        plt.vlines(rh_e, y_min, y_max, alpha=0.3, color='grey', linestyle='--')
 
 
 # for i in rh_binned:
